@@ -1,7 +1,8 @@
-#![allow(dead_code)]
-
 pub mod token;
-use token::{NUMERIC_CONSTANT_MAX_LENGTH, OTHER_TOKENS_MAP, Token};
+use token::{
+    IDENTIFIER_MAX_LENGTH, KEYWORDS_MAP, NUMERIC_CONSTANT_MAX_LENGTH, OTHER_TOKEN_MAX_LENGTH,
+    OTHER_TOKENS_MAP, Token,
+};
 
 use anyhow::{anyhow, bail};
 
@@ -25,13 +26,17 @@ fn is_whitespace(c: char) -> bool {
     c.is_ascii_whitespace()
 }
 
+fn is_alphabetic_or_underscore(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_'
+}
+
 fn is_digit(c: char) -> bool {
     c.is_ascii_digit()
 }
 
 fn is_other(c: char) -> bool {
     match c {
-        '+' | '-' | '*' | '/' | '(' | ')' => true,
+        '+' | '-' | '*' | '/' | '(' | ')' | '=' => true,
         _ => false,
     }
 }
@@ -56,20 +61,51 @@ impl<InputIterT: Iterator<Item = char>> Lexer<InputIterT> {
         };
 
         Some({
-            if is_digit(symb) {
+            if is_alphabetic_or_underscore(symb) {
+                self.read_alphanumeric()
+            } else if is_digit(symb) {
                 self.read_numeric_literal()
             } else if is_other(symb) {
                 self.read_other_token()
             } else {
-                Err(anyhow!(format!("unexpected symbol: {}", symb)))
+                Err(anyhow!("unexpected symbol: {}", symb))
             }
         })
     }
 
-    // Pre: the current symbol on iter is digit.
+    // Pre: the current symbol on iter is alphanumeric or underscore (as determined by *is_alnum_or_underscore* func).
+    fn read_alphanumeric(&mut self) -> LexerResult {
+        let mut token = String::with_capacity(8);
+        token.push(
+            self.input_iter
+                .next()
+                .expect("shouldnt happen due to preconditions"),
+        );
+
+        while let Some(&symb) = self.input_iter.peek() {
+            if !(is_alphabetic_or_underscore(symb) || is_digit(symb)) {
+                break;
+            }
+
+            if token.len() > IDENTIFIER_MAX_LENGTH {
+                bail!("input token seems to be too long");
+            }
+
+            token.push(symb);
+            self.input_iter.next();
+        }
+
+        Ok(match KEYWORDS_MAP.get(&token) {
+            Some(kw) => kw.clone(),
+            None => Token::Identifier(token.into_boxed_str()),
+        })
+    }
+
+    // Pre: the current symbol on iter is digit (as determined by *is_digit* func).
     fn read_numeric_literal(&mut self) -> LexerResult {
         // let mut has_met_fract_part = false;
-        let mut num = String::from(
+        let mut num = String::with_capacity(4);
+        num.push(
             self.input_iter
                 .next()
                 .expect("shouldnt happen due to preconditions"),
@@ -81,7 +117,7 @@ impl<InputIterT: Iterator<Item = char>> Lexer<InputIterT> {
             }
 
             if num.len() > NUMERIC_CONSTANT_MAX_LENGTH {
-                bail!("input number seems to be too long");
+                bail!("input token seems to be too long");
             }
 
             num.push(symb);
@@ -93,9 +129,10 @@ impl<InputIterT: Iterator<Item = char>> Lexer<InputIterT> {
         Ok(Token::NumericConstant(num))
     }
 
-    // Pre: the current symbol on iter is one of the token::OTHER_TOKENS_MAP keys symbol.
+    // Pre: the current symbol on iter is one of the token::OTHER_TOKENS_MAP keys symbol (as determined by *is_other* func).
     fn read_other_token(&mut self) -> LexerResult {
-        let mut token = String::from(
+        let mut token = String::with_capacity(OTHER_TOKEN_MAX_LENGTH);
+        token.push(
             self.input_iter
                 .next()
                 .expect("shouldnt happen due to preconditions"),
@@ -108,7 +145,7 @@ impl<InputIterT: Iterator<Item = char>> Lexer<InputIterT> {
                 break;
             }
 
-            if token.len() > NUMERIC_CONSTANT_MAX_LENGTH {
+            if token.len() > OTHER_TOKEN_MAX_LENGTH {
                 break;
             }
 
@@ -117,7 +154,7 @@ impl<InputIterT: Iterator<Item = char>> Lexer<InputIterT> {
             let curr_match = OTHER_TOKENS_MAP.get(&token);
 
             if last_match.is_some() && curr_match.is_none() {
-                return Ok(*last_match.unwrap());
+                return Ok(last_match.unwrap().clone());
             }
 
             self.input_iter.next();
@@ -125,10 +162,8 @@ impl<InputIterT: Iterator<Item = char>> Lexer<InputIterT> {
         }
 
         match last_match {
-            Some(&token) => Ok(token),
-            None => {
-                bail!("unknown token");
-            }
+            Some(token) => Ok(token.clone()),
+            None => bail!("unknown token"),
         }
     }
 }
@@ -147,7 +182,12 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert!(tokens.iter().eq(cmp_with.into_iter()));
+        assert!(
+            tokens.iter().eq(cmp_with.into_iter()),
+            "Expected: {:?}\nGot: {:?}.",
+            cmp_with,
+            tokens
+        );
     }
 
     #[test]

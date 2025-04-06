@@ -1,5 +1,5 @@
 mod codegen;
-use std::iter::Peekable;
+use std::{collections::HashMap, iter::Peekable};
 
 use anyhow::bail;
 use codegen::{CodeGeneratorTrait, RiscVCodeGen};
@@ -11,6 +11,8 @@ pub struct Compiler<InputIterT: Iterator<Item = char>> {
     lexer: Peekable<Lexer<InputIterT>>,
     #[allow(dead_code)]
     producer: Box<dyn CodeGeneratorTrait>,
+
+    global_env: HashMap<Box<str>, i64>,
 }
 
 impl<InputIterT: Iterator<Item = char>> Compiler<InputIterT> {
@@ -21,9 +23,29 @@ impl<InputIterT: Iterator<Item = char>> Compiler<InputIterT> {
         let mut compiler = Compiler {
             lexer: Lexer::new(input).peekable(),
             producer: Box::new(RiscVCodeGen::new(output)),
+            global_env: HashMap::new(),
         };
 
+        while let Some(Ok(Token::Identifier(_))) = compiler.lexer.peek() {
+            let Some(Ok(Token::Identifier(ident))) = compiler.lexer.next() else {
+                unreachable!();
+            };
+
+            let Some(eq_sign) = compiler.lexer.next() else {
+                bail!("Expected '=' after identifier");
+            };
+            let eq_sign = eq_sign?;
+            if eq_sign != Token::EqualsSign {
+                bail!("Expected '=' after identifier, found: {:?}", eq_sign);
+            }
+
+            let val = compiler.read_expr()?;
+
+            compiler.global_env.insert(ident, val);
+        }
+
         let result = compiler.read_expr()?;
+
         println!("Result: {}", result);
 
         Ok(())
@@ -55,6 +77,14 @@ impl<InputIterT: Iterator<Item = char>> Compiler<InputIterT> {
                 }
             }
 
+            Token::Identifier(ident) => {
+                let Some(val) = self.global_env.get(&ident) else {
+                    bail!("Undefined identifier: {:?}", ident);
+                };
+
+                Ok(*val)
+            }
+
             _ => bail!(
                 "Unexpected token: {:?}. Expected a numeric constant.",
                 token
@@ -71,13 +101,14 @@ impl<InputIterT: Iterator<Item = char>> Compiler<InputIterT> {
         let mut result = self.read_expr_atom()?;
 
         while let Some(token) = self.lexer.peek().clone() {
-            let token = match token {
-                Ok(token) => token.clone(),
-                Err(_) => bail!(match self.lexer.next().unwrap() {
-                    Err(e) => e,
-                    Ok(_) => unreachable!(),
-                }),
+            let Ok(token) = token else {
+                let Some(Err(err)) = self.lexer.next() else {
+                    unreachable!();
+                };
+
+                bail!(err);
             };
+            let token = token.clone();
 
             let precedence = match token {
                 Token::PlusSign | Token::MinusSign => 1,
@@ -113,17 +144,12 @@ impl<InputIterT: Iterator<Item = char>> Compiler<InputIterT> {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Read;
-
-    use tempfile::NamedTempFile;
-
     use super::*;
 
-    #[test]
-    fn compile_basic_program() -> Result<(), anyhow::Error> {
-        let input_str = include_str!("../examples/basic_program.qyk");
+    fn check_if_compiles(path: &'static str) -> Result<(), anyhow::Error> {
+        let input_str = std::fs::read_to_string(path)?;
 
-        let output = NamedTempFile::new()?;
+        let output = tempfile::NamedTempFile::new()?;
         // let mut aftercheck = output.reopen()?;
 
         let rslt = Compiler::compile(input_str.chars(), output);
@@ -137,5 +163,15 @@ mod tests {
         // println!("{}", &result);
 
         Ok(())
+    }
+
+    #[test]
+    fn compiles_basic_program() -> Result<(), anyhow::Error> {
+        check_if_compiles("examples/basic_program.qyk")
+    }
+
+    #[test]
+    fn compiles_complicated_program() -> Result<(), anyhow::Error> {
+        check_if_compiles("examples/complicated_program.qyk")
     }
 }

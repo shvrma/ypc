@@ -1,9 +1,8 @@
-mod compiler;
+mod lexer;
+
 use colored::Colorize;
 
-use crate::compiler::Compiler;
-
-use std::{fs::File, io::BufWriter};
+use std::fs::File;
 
 #[derive(argh::FromArgs)]
 /// A compiler of qiyoku project.
@@ -25,7 +24,7 @@ pub struct Args {
 fn main() {
     let args: Args = argh::from_env();
 
-    let Ok(input_str) = std::fs::read_to_string(&args.input_file_path) else {
+    let Ok(_) = std::fs::read_to_string(&args.input_file_path) else {
         eprintln!(
             "{} to read input file: {}.",
             "Failed".red(),
@@ -35,7 +34,7 @@ fn main() {
         return;
     };
 
-    let Ok(output_file) = File::create(&args.output_file_path) else {
+    let Ok(_) = File::create(&args.output_file_path) else {
         eprintln!(
             "{} to create output file: {}.",
             "Failed".red(),
@@ -45,8 +44,8 @@ fn main() {
         return;
     };
 
-    match Compiler::compile(input_str.chars(), BufWriter::new(output_file)) {
-        Ok(_) => println!("Compilation {}!", "succeeded".green()),
-        Err(err) => eprintln!("Compilation {}: {:?}", "failed".red(), err),
-    }
+    // match Compiler::compile(input_str.chars(), BufWriter::new(output_file)) {
+    //     Ok(_) => println!("Compilation {}!", "succeeded".green()),
+    //     Err(err) => eprintln!("Compilation {}: {:?}", "failed".red(), err),
+    // }
 }

@@ -10,6 +10,7 @@ anyhow = "1.0.97"
 argh = "0.1.13"
 colored = "3.0.0"
 phf = { version = "0.11.3", features = ["macros"] }
+trie-rs = "0.4.2"
 
 [dev-dependencies]
 tempfile = "3.19.1"

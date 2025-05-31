@@ -7,10 +7,11 @@ use trie_rs::inc_search::IncSearch;
 use trie_rs::map::Trie;
 use trie_rs::map::TrieBuilder;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    NumericConstant(u64), // A literal number.
     Identifier(Box<str>),
+    NumericConstant(u64),
+    StringLiteral(Box<str>),
 
     BreakKeyword,
     DefaultKeyword,
@@ -89,11 +90,12 @@ pub enum Token {
 }
 
 #[derive(Debug)]
-enum MatchPattern {
-    Identifier(String),
-    NumericLiteral(String),
+enum LexerState {
+    AlnumSeq(usize),
+    NumericLiteral(usize),
+    StringLiteral(usize, bool),
+    StringEnd(usize),
     OtherToken(IncSearch<'static, u8, Token>),
-    Keyword(IncSearch<'static, u8, Token>),
 
     SingleLineComment,
     MultilineComment,
@@ -205,141 +207,137 @@ impl Lexer {
     pub fn next_token(&mut self) -> Result<Option<Token>> {
         let c = 'outer: loop {
             for c in self.input_it[self.position..].chars() {
-                self.position += 1;
-
                 if !c.is_ascii_whitespace() {
                     break 'outer c;
                 }
+
+                self.position += 1;
             }
 
             return Ok(None);
         };
+        let mut state = match c {
+            '_' => LexerState::AlnumSeq(self.position),
 
-        let mut pattern = match c {
-            '_' => MatchPattern::Identifier("_".to_string()),
+            '/' => LexerState::CommentFirstSymbolRead,
 
-            '/' => MatchPattern::CommentFirstSymbolRead,
+            '"' => LexerState::StringLiteral(self.position, false),
 
-            c if c.is_digit(10) => MatchPattern::NumericLiteral(c.to_string()),
+            c if c.is_digit(10) => LexerState::NumericLiteral(self.position),
 
-            c if c.is_alphabetic() => {
-                let mut inc_kws = KEYWORDS.inc_search();
-                if let Some(_) = inc_kws.query(&u8::try_from(c).unwrap()) {
-                    MatchPattern::Keyword(inc_kws)
-                } else {
-                    MatchPattern::Identifier(c.to_string())
-                }
-            }
+            c if c.is_alphabetic() => LexerState::AlnumSeq(self.position),
 
             _ => {
                 let mut inc_o = OTHERS.inc_search();
-                if let Some(_) = inc_o.query(&u8::try_from(c).unwrap()) {
-                    MatchPattern::OtherToken(inc_o)
+                if let Some(_) = inc_o
+                    .query(&u8::try_from(c).with_context(|| format!("invalid symbol met: {}", c))?)
+                {
+                    LexerState::OtherToken(inc_o)
                 } else {
                     bail!("Invalid symbol met: '{}'", c);
                 }
             }
         };
 
+        self.position += 1;
+
         while let Some(c) = self.input_it[self.position..].chars().next() {
-            match pattern {
-                MatchPattern::Identifier(ref mut ident) => {
+            match state {
+                LexerState::AlnumSeq(_) => {
                     if !c.is_alphanumeric() && c != '_' {
                         break;
                     }
-
-                    ident.push(c);
                 }
 
-                MatchPattern::Keyword(ref mut kw) => {
-                    let Ok(c_as_u8) = u8::try_from(c) else {
-                        pattern = MatchPattern::Identifier(kw.prefix::<String, _>());
-                        continue;
-                    };
+                LexerState::NumericLiteral(_) => {
+                    if !c.is_digit(10) {
+                        break;
+                    }
+                }
 
-                    if let None = kw.peek(&c_as_u8) {
-                        if c.is_alphanumeric() || c == '_' {
-                            pattern = MatchPattern::Identifier(kw.prefix::<String, _>());
-                            continue;
+                LexerState::StringLiteral(ref mut s_val, ref mut is_escaped) => {
+                    if *is_escaped {
+                        // TODO: more escape sequences
+                        if c != '"' {
+                            bail!("Invalid escape sequence: \\{}", c);
                         }
 
-                        break;
-                    }
-
-                    kw.query(&c_as_u8);
-                }
-
-                MatchPattern::NumericLiteral(ref mut num) => {
-                    if !c.is_ascii_digit() {
-                        break;
-                    }
-
-                    num.push(c);
-                }
-
-                MatchPattern::OtherToken(ref mut token) => {
-                    if let None = token.query(&u8::try_from(c).unwrap()) {
-                        break;
+                        *is_escaped = false;
+                    } else if c == '\\' {
+                        *is_escaped = true;
+                    } else if c == '"' {
+                        state = LexerState::StringEnd(*s_val);
+                    } else if c == '\n' {
+                        bail!("Unterminated string literal");
                     }
                 }
 
-                MatchPattern::CommentFirstSymbolRead => {
+                LexerState::OtherToken(ref mut token) => {
+                    if let None = token
+                        .query(&u8::try_from(c).with_context(|| format!("unexpected symbol met"))?)
+                    {
+                        break;
+                    }
+                }
+
+                LexerState::CommentFirstSymbolRead => {
                     if c == '/' {
-                        pattern = MatchPattern::SingleLineComment;
+                        state = LexerState::SingleLineComment;
                     } else if c == '*' {
-                        pattern = MatchPattern::MultilineComment;
+                        state = LexerState::MultilineComment;
                     } else {
                         let mut inc_o = OTHERS.inc_search();
-                        inc_o.query(&u8::try_from('/').unwrap());
-                        pattern = MatchPattern::OtherToken(inc_o);
+                        inc_o.query(&b'/');
+                        state = LexerState::OtherToken(inc_o);
                         continue;
                     }
                 }
 
-                MatchPattern::SingleLineComment => {
+                LexerState::SingleLineComment => {
                     if c == '\n' {
-                        pattern = MatchPattern::CommentEnd;
+                        state = LexerState::CommentEnd;
                     }
                 }
 
-                MatchPattern::MultilineComment => {
+                LexerState::MultilineComment => {
                     if c == '*' {
-                        pattern = MatchPattern::MultilineCommentClosingFirstSymbolRead;
+                        state = LexerState::MultilineCommentClosingFirstSymbolRead;
                     }
                 }
 
-                MatchPattern::MultilineCommentClosingFirstSymbolRead => {
+                LexerState::MultilineCommentClosingFirstSymbolRead => {
                     if c == '/' {
-                        pattern = MatchPattern::CommentEnd;
+                        state = LexerState::CommentEnd;
                     } else {
-                        pattern = MatchPattern::MultilineComment;
+                        state = LexerState::MultilineComment;
                     }
                 }
 
-                MatchPattern::CommentEnd => break,
+                LexerState::CommentEnd | LexerState::StringEnd(_) => break,
             }
 
             self.position += 1;
         }
 
-        Ok(Some(match pattern {
-            MatchPattern::Identifier(ident) => Token::Identifier(ident.into_boxed_str()),
+        Ok(Some(match state {
+            LexerState::AlnumSeq(begin_idx) => KEYWORDS
+                .exact_match(&self.input_it[begin_idx..self.position])
+                .map_or_else(
+                    || Token::Identifier(self.input_it[begin_idx..self.position].into()),
+                    |t| t.clone(),
+                ),
 
-            MatchPattern::Keyword(kw) => {
-                if let Some(token) = kw.value() {
-                    token.clone()
-                } else {
-                    Token::Identifier(kw.prefix::<String, _>().into_boxed_str())
-                }
+            LexerState::NumericLiteral(begin_idx) => {
+                let num_str = &self.input_it[begin_idx..self.position];
+
+                Token::NumericConstant(
+                    num_str
+                        .parse()
+                        .with_context(|| format!("Failed to parse number: '{}'", num_str))?,
+                )
             }
 
-            MatchPattern::NumericLiteral(number) => Token::NumericConstant(
-                number
-                    .parse()
-                    .with_context(|| format!("Failed to parse number: '{}'", number))?,
-            ),
-
-            MatchPattern::OtherToken(token) => {
+            LexerState::OtherToken(token) => {
                 if let Some(val) = token.value() {
                     val.clone()
                 } else {
@@ -350,12 +348,16 @@ impl Lexer {
                 }
             }
 
-            // Single line comment not always should end with newline (EOF as example)
-            MatchPattern::CommentEnd | MatchPattern::SingleLineComment => return self.next_token(),
+            LexerState::CommentEnd => return self.next_token(),
+
+            LexerState::StringEnd(begin_idx) => {
+                let str_val = &self.input_it[begin_idx + 1..self.position - 1];
+                Token::StringLiteral(str_val.into())
+            }
 
             _ => bail!(
                 "Finished in non-terminal state {:?}, looks like logical error",
-                pattern
+                state
             ),
         }))
     }
@@ -505,9 +507,10 @@ mod tests {
         );
 
         assert_eq!(
-            tokenize("/* comment with // nested single */ identifier // and another comment")?,
+            tokenize("/* comment with // nested single */ identifier // and another comment\n")?,
             [Token::Identifier("identifier".into())],
         );
+
         Ok(())
     }
 
@@ -564,6 +567,31 @@ mod tests {
         );
 
         assert_eq!(tokenize("case+")?, [Token::CaseKeyword, Token::PlusSign]);
+        Ok(())
+    }
+
+    #[test]
+    fn handles_string_literals() -> Result<()> {
+        assert_eq!(
+            tokenize(r#""""#)?, // Empty string
+            [Token::StringLiteral("".into())]
+        );
+
+        assert_eq!(
+            tokenize(r#""hello""#)?,
+            [Token::StringLiteral("hello".into())]
+        );
+
+        assert_eq!(
+            tokenize(r#""hello world""#)?,
+            [Token::StringLiteral("hello world".into())]
+        );
+
+        assert_eq!(
+            tokenize(r#""escaped \"quotes\"""#)?,
+            [Token::StringLiteral("escaped \\\"quotes\\\"".into())]
+        );
+
         Ok(())
     }
 

@@ -1,3 +1,4 @@
+mod parser;
 mod lexer;
 
 use colored::Colorize;

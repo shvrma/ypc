@@ -8,7 +8,9 @@ license = "GPL-3.0-or-later"
 [dependencies]
 anyhow = "1.0.97"
 argh = "0.1.13"
+chumsky = "0.10.1"
 colored = "3.0.0"
+nom = "8.0.0"
 phf = { version = "0.11.3", features = ["macros"] }
 trie-rs = "0.4.2"
 

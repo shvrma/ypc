@@ -8,14 +8,60 @@ See *examples* directory for examples of the code.
 
 ```bnf
 
-program ::= {assignment} expr
+decimal_digit => "0"..."9"
+decimal_digits => decimal_digit decimal_digits
+decimal_digits =>
 
-assignment ::= ident '=' expr
+int_literal => "0"
+int_literal => "1"..."9" decimal_digits
 
-expr ::= expr_atom {bin_op expr}
+float_literal => "0" "." decimal_digits
+float_literal => "1"..."9" decimal_digits "." decimal_digits
 
-expr_atom ::= NumericLiteral | '(' expr ')' | '-' expr
+letter => "a"..."z"
+letter => "A"..."Z"
+name => letter name'
+name => "_" name'
+name' => letter name'
+name' => decimal_digit name'
+name' =>
 
-bin_op ::= '+' | '-' | '*' | '/'
+assignment_statement => "var" name "=" expr
+
+expr => int_literal
+expr => float_literal
+expr => name
+expr => unary_op expr
+expr => expr binary_op expr
+expr => "(" expr ")"
+
+binary_op => "||"
+binary_op => "&&"
+binary_op => rel_op
+binary_op => add_op
+binary_op => mul_op
+
+rel_op => "=="
+rel_op => "!="
+rel_op => "<"
+rel_op => "<="
+rel_op => ">"
+rel_op => ">="
+
+add_op => "+"
+add_op => "-"
+add_op => "|"
+add_op => "^"
+
+mul_op => "*"
+mul_op => "/"
+mul_op => "%"
+mul_op => "<<"
+mul_op => ">>"
+
+unary_op => "!"
+unary_op => "^"
+unary_op => "*"
+unary_op => "&"
 
 ```

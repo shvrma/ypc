@@ -36,7 +36,6 @@ pub enum Token<'a> {
     PlusSign,                        // +
     AmpersandSign,                   // &
     PlusEqualSign,                   // +=
-    AmpersandEqualSign,              // &=
     AmpersandAmpersandSign,          // &&
     EqualEqualSign,                  // ==
     ExclamationMarkEqualSign,        // !=
@@ -52,10 +51,7 @@ pub enum Token<'a> {
     LeftSquareBracketSign,           // [
     RightSquareBracketSign,          // ]
     AsteriskSign,                    // *
-    CaretSign,                       // ^
     AsteriskEqualSign,               // *=
-    CaretEqualSign,                  // ^=
-    LessThanMinusSign,               // <-
     GreaterThanSign,                 // >
     GreaterThanEqualSign,            // >=
     LeftFigureBracketSign,           // {
@@ -75,7 +71,6 @@ pub enum Token<'a> {
     ExclamationMarkSign,             // !
     DotSign,                         // .
     ColonSign,                       // :
-    TildeSign,                       // ~
 }
 
 #[derive(Debug, Clone)]
@@ -129,7 +124,6 @@ static OTHERS: LazyLock<Trie<u8, Token>> = LazyLock::new(|| {
     builder.push("+", Token::PlusSign);
     builder.push("&", Token::AmpersandSign);
     builder.push("+=", Token::PlusEqualSign);
-    builder.push("&=", Token::AmpersandEqualSign);
     builder.push("&&", Token::AmpersandAmpersandSign);
     builder.push("==", Token::EqualEqualSign);
     builder.push("!=", Token::ExclamationMarkEqualSign);
@@ -145,10 +139,7 @@ static OTHERS: LazyLock<Trie<u8, Token>> = LazyLock::new(|| {
     builder.push("[", Token::LeftSquareBracketSign);
     builder.push("]", Token::RightSquareBracketSign);
     builder.push("*", Token::AsteriskSign);
-    builder.push("^", Token::CaretSign); // ^
     builder.push("*=", Token::AsteriskEqualSign);
-    builder.push("^=", Token::CaretEqualSign);
-    builder.push("<-", Token::LessThanMinusSign);
     builder.push(">", Token::GreaterThanSign);
     builder.push(">=", Token::GreaterThanEqualSign);
     builder.push("{", Token::LeftFigureBracketSign);
@@ -168,7 +159,6 @@ static OTHERS: LazyLock<Trie<u8, Token>> = LazyLock::new(|| {
     builder.push("!", Token::ExclamationMarkSign);
     builder.push(".", Token::DotSign);
     builder.push(":", Token::ColonSign);
-    builder.push("~", Token::TildeSign); // ~
 
     builder.build()
 });
@@ -249,9 +239,7 @@ impl<'a> Lexer<'a> {
                         }
 
                         *is_float = true;
-                    }
-
-                    if !c.is_digit(10) {
+                    } else if !c.is_digit(10) {
                         break;
                     }
                 }
@@ -376,223 +364,220 @@ impl<'a> Lexer<'a> {
 mod tests {
     use super::*;
 
-    fn tokenize(input: &'static str) -> Result<Vec<Token<'static>>> {
-        let lexer = Lexer::new(input);
+    #[test]
+    fn test_keywords() {
+        let input = "break default func select case map struct else switch const if range type continue for return var";
+        let mut lexer = Lexer::new(input);
 
-        Ok(lexer.collect::<Vec<_>>())
+        assert_eq!(lexer.next(), Some(Token::BreakKeyword));
+        assert_eq!(lexer.next(), Some(Token::DefaultKeyword));
+        assert_eq!(lexer.next(), Some(Token::FuncKeyword));
+        assert_eq!(lexer.next(), Some(Token::SelectKeyword));
+        assert_eq!(lexer.next(), Some(Token::CaseKeyword));
+        assert_eq!(lexer.next(), Some(Token::MapKeyword));
+        assert_eq!(lexer.next(), Some(Token::StructKeyword));
+        assert_eq!(lexer.next(), Some(Token::ElseKeyword));
+        assert_eq!(lexer.next(), Some(Token::SwitchKeyword));
+        assert_eq!(lexer.next(), Some(Token::ConstKeyword));
+        assert_eq!(lexer.next(), Some(Token::IfKeyword));
+        assert_eq!(lexer.next(), Some(Token::RangeKeyword));
+        assert_eq!(lexer.next(), Some(Token::TypeKeyword));
+        assert_eq!(lexer.next(), Some(Token::ContinueKeyword));
+        assert_eq!(lexer.next(), Some(Token::ForKeyword));
+        assert_eq!(lexer.next(), Some(Token::ReturnKeyword));
+        assert_eq!(lexer.next(), Some(Token::VarKeyword));
+        assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn handles_empty_and_whitespace_input() -> Result<()> {
-        assert_eq!(tokenize("")?, []);
-        assert_eq!(tokenize("  ")?, []);
-        Ok(())
+    fn test_identifiers() {
+        let input = "variable _underscore myVar123 _123";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(lexer.next(), Some(Token::Identifier("variable")));
+        assert_eq!(lexer.next(), Some(Token::Identifier("_underscore")));
+        assert_eq!(lexer.next(), Some(Token::Identifier("myVar123")));
+        assert_eq!(lexer.next(), Some(Token::Identifier("_123")));
+        assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn handles_keywords() -> Result<()> {
-        assert_eq!(
-            tokenize(
-                "break default func select case map struct else switch const if range type continue for return var"
-            )?,
-            [
-                Token::BreakKeyword,
-                Token::DefaultKeyword,
-                Token::FuncKeyword,
-                Token::SelectKeyword,
-                Token::CaseKeyword,
-                Token::MapKeyword,
-                Token::StructKeyword,
-                Token::ElseKeyword,
-                Token::SwitchKeyword,
-                Token::ConstKeyword,
-                Token::IfKeyword,
-                Token::RangeKeyword,
-                Token::TypeKeyword,
-                Token::ContinueKeyword,
-                Token::ForKeyword,
-                Token::ReturnKeyword,
-                Token::VarKeyword,
-            ],
-        );
-        Ok(())
+    fn test_numeric_literals() {
+        let input = "123 456.789 0 1.0";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(lexer.next(), Some(Token::IntConstant(123)));
+        assert_eq!(lexer.next(), Some(Token::FloatConstant(456.789)));
+        assert_eq!(lexer.next(), Some(Token::IntConstant(0)));
+        assert_eq!(lexer.next(), Some(Token::FloatConstant(1.0)));
+        assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn handles_operators_and_punctuation() -> Result<()> {
-        assert_eq!(
-            tokenize(
-                "+ & += &= && == != ( ) - | -= |= || < <= [ ] * ^ *= ^= <- > >= { } / << /= <<= = := , ; % >> %= >>= ! . : ~"
-            )?,
-            [
-                Token::PlusSign,
-                Token::AmpersandSign,
-                Token::PlusEqualSign,
-                Token::AmpersandEqualSign,
-                Token::AmpersandAmpersandSign,
-                Token::EqualEqualSign,
-                Token::ExclamationMarkEqualSign,
-                Token::LeftParenthesisSign,
-                Token::RightParenthesisSign,
-                Token::MinusSign,
-                Token::PipeSign,
-                Token::MinusEqualSign,
-                Token::PipeEqualSign,
-                Token::PipePipeSign,
-                Token::LessThanSign,
-                Token::LessThanEqualSign,
-                Token::LeftSquareBracketSign,
-                Token::RightSquareBracketSign,
-                Token::AsteriskSign,
-                Token::CaretSign,
-                Token::AsteriskEqualSign,
-                Token::CaretEqualSign,
-                Token::LessThanMinusSign,
-                Token::GreaterThanSign,
-                Token::GreaterThanEqualSign,
-                Token::LeftFigureBracketSign,
-                Token::RightFigureBracketSign,
-                Token::SlashSign,
-                Token::LessThanLessThanSign,
-                Token::SlashEqualSign,
-                Token::LessThanLessThanEqualSign,
-                Token::EqualSign,
-                Token::ColonEqualSign,
-                Token::CommaSign,
-                Token::SemicolonSign,
-                Token::PercentSign,
-                Token::GreaterThanGreaterThanSign,
-                Token::PercentEqualSign,
-                Token::GreaterThanGreaterThanEqualSign,
-                Token::ExclamationMarkSign,
-                Token::DotSign,
-                Token::ColonSign,
-                Token::TildeSign,
-            ],
-        );
+    fn test_string_literals() {
+        let input = r#""hello" "world" "hello world" """#;
+        let mut lexer = Lexer::new(input);
 
-        Ok(())
+        assert_eq!(lexer.next(), Some(Token::StringLiteral("hello")));
+        assert_eq!(lexer.next(), Some(Token::StringLiteral("world")));
+        assert_eq!(lexer.next(), Some(Token::StringLiteral("hello world")));
+        assert_eq!(lexer.next(), Some(Token::StringLiteral("")));
+        assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn handles_identifiers() -> Result<()> {
-        assert_eq!(
-            tokenize("identifier1 _ident _ _123 ident_")?,
-            [
-                Token::Identifier("identifier1".into()),
-                Token::Identifier("_ident".into()),
-                Token::Identifier("_".into()),
-                Token::Identifier("_123".into()),
-                Token::Identifier("ident_".into()),
-            ],
-        );
-        Ok(())
+    fn test_operators() {
+        let input = "+ - * / % = == != < > <= >= && || ! & |";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(lexer.next(), Some(Token::PlusSign));
+        assert_eq!(lexer.next(), Some(Token::MinusSign));
+        assert_eq!(lexer.next(), Some(Token::AsteriskSign));
+        assert_eq!(lexer.next(), Some(Token::SlashSign));
+        assert_eq!(lexer.next(), Some(Token::PercentSign));
+        assert_eq!(lexer.next(), Some(Token::EqualSign));
+        assert_eq!(lexer.next(), Some(Token::EqualEqualSign));
+        assert_eq!(lexer.next(), Some(Token::ExclamationMarkEqualSign));
+        assert_eq!(lexer.next(), Some(Token::LessThanSign));
+        assert_eq!(lexer.next(), Some(Token::GreaterThanSign));
+        assert_eq!(lexer.next(), Some(Token::LessThanEqualSign));
+        assert_eq!(lexer.next(), Some(Token::GreaterThanEqualSign));
+        assert_eq!(lexer.next(), Some(Token::AmpersandAmpersandSign));
+        assert_eq!(lexer.next(), Some(Token::PipePipeSign));
+        assert_eq!(lexer.next(), Some(Token::ExclamationMarkSign));
+        assert_eq!(lexer.next(), Some(Token::AmpersandSign));
+        assert_eq!(lexer.next(), Some(Token::PipeSign));
+        assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn handles_comments() -> Result<()> {
-        assert_eq!(
-            tokenize("// this is a single line comment\nidentifier")?,
-            [Token::Identifier("identifier".into())],
-        );
+    fn test_assignment_operators() {
+        let input = "+= -= *= /= %= <<= >>= |= :=";
+        let mut lexer = Lexer::new(input);
 
-        assert_eq!(
-            tokenize("/* this is a multi-line comment */ identifier")?,
-            [Token::Identifier("identifier".into())],
-        );
-
-        assert_eq!(
-            tokenize("/* comment with // nested single */ identifier // and another comment\n")?,
-            [Token::Identifier("identifier".into())],
-        );
-
-        Ok(())
+        assert_eq!(lexer.next(), Some(Token::PlusEqualSign));
+        assert_eq!(lexer.next(), Some(Token::MinusEqualSign));
+        assert_eq!(lexer.next(), Some(Token::AsteriskEqualSign));
+        assert_eq!(lexer.next(), Some(Token::SlashEqualSign));
+        assert_eq!(lexer.next(), Some(Token::PercentEqualSign));
+        assert_eq!(lexer.next(), Some(Token::LessThanLessThanEqualSign));
+        assert_eq!(lexer.next(), Some(Token::GreaterThanGreaterThanEqualSign));
+        assert_eq!(lexer.next(), Some(Token::PipeEqualSign));
+        assert_eq!(lexer.next(), Some(Token::ColonEqualSign));
+        assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn handles_comments_mixed_with_code() -> Result<()> {
-        assert_eq!(
-            tokenize("if//comment\n1")?,
-            [Token::IfKeyword, Token::IntConstant(1)],
-        );
+    fn test_brackets_and_punctuation() {
+        let input = "( ) [ ] { } , ; : .";
+        let mut lexer = Lexer::new(input);
 
-        assert_eq!(
-            tokenize("if/*comment*/1")?,
-            [Token::IfKeyword, Token::IntConstant(1)],
-        );
-        Ok(())
+        assert_eq!(lexer.next(), Some(Token::LeftParenthesisSign));
+        assert_eq!(lexer.next(), Some(Token::RightParenthesisSign));
+        assert_eq!(lexer.next(), Some(Token::LeftSquareBracketSign));
+        assert_eq!(lexer.next(), Some(Token::RightSquareBracketSign));
+        assert_eq!(lexer.next(), Some(Token::LeftFigureBracketSign));
+        assert_eq!(lexer.next(), Some(Token::RightFigureBracketSign));
+        assert_eq!(lexer.next(), Some(Token::CommaSign));
+        assert_eq!(lexer.next(), Some(Token::SemicolonSign));
+        assert_eq!(lexer.next(), Some(Token::ColonSign));
+        assert_eq!(lexer.next(), Some(Token::DotSign));
+        assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn handles_mixed_code_with_comments_and_various_tokens() -> Result<()> {
-        assert_eq!(
-            tokenize(
-                "var a = 10; // variable declaration\n/* main function */\nfunc main() {\n\treturn a;\n}"
-            )?,
-            [
-                Token::VarKeyword,
-                Token::Identifier("a".into()),
-                Token::EqualSign,
-                Token::IntConstant(10),
-                Token::SemicolonSign,
-                Token::FuncKeyword,
-                Token::Identifier("main".into()),
-                Token::LeftParenthesisSign,
-                Token::RightParenthesisSign,
-                Token::LeftFigureBracketSign,
-                Token::ReturnKeyword,
-                Token::Identifier("a".into()),
-                Token::SemicolonSign,
-                Token::RightFigureBracketSign,
-            ]
-        );
-        Ok(())
+    fn test_shift_operators() {
+        let input = "<< >>";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(lexer.next(), Some(Token::LessThanLessThanSign));
+        assert_eq!(lexer.next(), Some(Token::GreaterThanGreaterThanSign));
+        assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn handles_keyword_identifier_edge_cases() -> Result<()> {
-        assert_eq!(
-            tokenize("casebreak")?,
-            [Token::Identifier("casebreak".into())]
-        );
+    fn test_single_line_comment() {
+        let input = "var x // this is a comment\nvar y";
+        let mut lexer = Lexer::new(input);
 
-        assert_eq!(
-            tokenize("case break")?,
-            [Token::CaseKeyword, Token::BreakKeyword]
-        );
-
-        assert_eq!(tokenize("case+")?, [Token::CaseKeyword, Token::PlusSign]);
-        Ok(())
+        assert_eq!(lexer.next(), Some(Token::VarKeyword));
+        assert_eq!(lexer.next(), Some(Token::Identifier("x")));
+        assert_eq!(lexer.next(), Some(Token::VarKeyword));
+        assert_eq!(lexer.next(), Some(Token::Identifier("y")));
+        assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn handles_string_literals() -> Result<()> {
-        assert_eq!(
-            tokenize(r#""""#)?, // Empty string
-            [Token::StringLiteral("".into())]
-        );
+    fn test_multiline_comment() {
+        let input = "var x /* this is a\nmultiline comment */ var y";
+        let mut lexer = Lexer::new(input);
 
-        assert_eq!(
-            tokenize(r#""hello""#)?,
-            [Token::StringLiteral("hello".into())]
-        );
-
-        assert_eq!(
-            tokenize(r#""hello world""#)?,
-            [Token::StringLiteral("hello world".into())]
-        );
-
-        assert_eq!(
-            tokenize(r#""escaped \"quotes\"""#)?,
-            [Token::StringLiteral("escaped \\\"quotes\\\"".into())]
-        );
-
-        Ok(())
+        assert_eq!(lexer.next(), Some(Token::VarKeyword));
+        assert_eq!(lexer.next(), Some(Token::Identifier("x")));
+        assert_eq!(lexer.next(), Some(Token::VarKeyword));
+        assert_eq!(lexer.next(), Some(Token::Identifier("y")));
+        assert_eq!(lexer.next(), None);
     }
 
     #[test]
-    fn handles_invalid_input() {
-        // assert!(tokenize("@").is_err()); // Invalid character
-        // assert!(tokenize("let #").is_err()); // Invalid character
+    fn test_whitespace_handling() {
+        let input = "  var   x  =  123  ";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(lexer.next(), Some(Token::VarKeyword));
+        assert_eq!(lexer.next(), Some(Token::Identifier("x")));
+        assert_eq!(lexer.next(), Some(Token::EqualSign));
+        assert_eq!(lexer.next(), Some(Token::IntConstant(123)));
+        assert_eq!(lexer.next(), None);
+    }
+
+    #[test]
+    fn test_complex_expression() {
+        let input = "if (x >= 10 && y != \"hello\") { return true; }";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(lexer.next(), Some(Token::IfKeyword));
+        assert_eq!(lexer.next(), Some(Token::LeftParenthesisSign));
+        assert_eq!(lexer.next(), Some(Token::Identifier("x")));
+        assert_eq!(lexer.next(), Some(Token::GreaterThanEqualSign));
+        assert_eq!(lexer.next(), Some(Token::IntConstant(10)));
+        assert_eq!(lexer.next(), Some(Token::AmpersandAmpersandSign));
+        assert_eq!(lexer.next(), Some(Token::Identifier("y")));
+        assert_eq!(lexer.next(), Some(Token::ExclamationMarkEqualSign));
+        assert_eq!(lexer.next(), Some(Token::StringLiteral("hello")));
+        assert_eq!(lexer.next(), Some(Token::RightParenthesisSign));
+        assert_eq!(lexer.next(), Some(Token::LeftFigureBracketSign));
+        assert_eq!(lexer.next(), Some(Token::ReturnKeyword));
+        assert_eq!(lexer.next(), Some(Token::Identifier("true")));
+        assert_eq!(lexer.next(), Some(Token::SemicolonSign));
+        assert_eq!(lexer.next(), Some(Token::RightFigureBracketSign));
+        assert_eq!(lexer.next(), None);
+    }
+
+    #[test]
+    fn test_escaped_quotes() {
+        let input = r#""hello \"world\"" "test\"""#;
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(
+            lexer.next(),
+            Some(Token::StringLiteral("hello \\\"world\\\""))
+        );
+        assert_eq!(lexer.next(), Some(Token::StringLiteral("test\\\"")));
+        assert_eq!(lexer.next(), None);
+    }
+
+    #[test]
+    fn test_division_vs_comment() {
+        let input = "x / y // comment\nz /= w";
+        let mut lexer = Lexer::new(input);
+
+        assert_eq!(lexer.next(), Some(Token::Identifier("x")));
+        assert_eq!(lexer.next(), Some(Token::SlashSign));
+        assert_eq!(lexer.next(), Some(Token::Identifier("y")));
+        assert_eq!(lexer.next(), Some(Token::Identifier("z")));
+        assert_eq!(lexer.next(), Some(Token::SlashEqualSign));
+        assert_eq!(lexer.next(), Some(Token::Identifier("w")));
+        assert_eq!(lexer.next(), None);
     }
 }

@@ -50,8 +50,6 @@ rel_op => ">="
 
 add_op => "+"
 add_op => "-"
-add_op => "|"
-add_op => "^"
 
 mul_op => "*"
 mul_op => "/"
@@ -60,7 +58,6 @@ mul_op => "<<"
 mul_op => ">>"
 
 unary_op => "!"
-unary_op => "^"
 unary_op => "*"
 unary_op => "&"
 

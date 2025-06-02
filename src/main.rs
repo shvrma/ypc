@@ -1,7 +1,5 @@
-mod parser;
 mod lexer;
-
-use colored::Colorize;
+mod parser;
 
 use std::fs::File;
 
@@ -22,31 +20,12 @@ pub struct Args {
     compile_only: bool,
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Args = argh::from_env();
 
-    let Ok(_) = std::fs::read_to_string(&args.input_file_path) else {
-        eprintln!(
-            "{} to read input file: {}.",
-            "Failed".red(),
-            args.input_file_path.italic()
-        );
+    let _ = std::fs::read_to_string(&args.input_file_path)?;
 
-        return;
-    };
+    let _ = File::create(&args.output_file_path)?;
 
-    let Ok(_) = File::create(&args.output_file_path) else {
-        eprintln!(
-            "{} to create output file: {}.",
-            "Failed".red(),
-            args.output_file_path.italic()
-        );
-
-        return;
-    };
-
-    // match Compiler::compile(input_str.chars(), BufWriter::new(output_file)) {
-    //     Ok(_) => println!("Compilation {}!", "succeeded".green()),
-    //     Err(err) => eprintln!("Compilation {}: {:?}", "failed".red(), err),
-    // }
+    Ok(())
 }

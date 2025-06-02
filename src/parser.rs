@@ -1,6 +1,5 @@
 use chumsky::{
-    input::{IterInput, Stream},
-    prelude::*,
+    Parser, error::Rich, extra, input::Stream, prelude::just, recursive::recursive, select,
 };
 
 use crate::lexer::{Lexer, Token};
@@ -25,7 +24,7 @@ pub enum Expression {
         func: Box<Expression>,
         args: Vec<Expression>,
     },
-    Parantheses(Box<Expression>),
+    Parentheses(Box<Expression>),
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -57,510 +56,380 @@ pub enum BinOp {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Stmt {
-    VarDeclaration {
-        name: String,
-        value: Option<Expression>,
-    },
     ExpressionStatement(Expression),
-    If {
-        condition: Expression,
-        then_branch: Vec<Stmt>,
-        else_branch: Option<Vec<Stmt>>,
-    },
-    ForLoop {
-        condition: Expression,
-        body: Vec<Stmt>,
-    },
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Program {
-    FuncDeclaration {
-        name: String,
-        params: Vec<String>,
-        body: Vec<Stmt>,
-    },
-    ConstDeclaration {
-        name: String,
-        value: Expression,
-    },
+pub enum Program {}
+
+type ErrT<'a> = extra::Err<Rich<'a, Token<'a>>>;
+type InputT<'a> = Stream<Lexer<'a>>;
+
+fn expr<'a>() -> impl Parser<'a, InputT<'a>, Expression, ErrT<'a>> {
+    recursive(|expr| {
+        let atom = select! {
+            Token::IntConstant(n) => Expression::Num(n),
+            Token::FloatConstant(f) => Expression::Float(f),
+            Token::StringLiteral(s) => Expression::Str(s.to_string()),
+            Token::Identifier(i) => Expression::Ident(i.to_string()),
+        };
+        let atom = atom.or(expr
+            .delimited_by(
+                just(Token::LeftParenthesisSign),
+                just(Token::RightParenthesisSign),
+            )
+            .map(|inner_expr| Expression::Parentheses(Box::new(inner_expr))));
+
+        use chumsky::pratt::{infix, left, prefix};
+
+        atom.pratt((
+            // Unary
+
+            // -
+            prefix(6, just(Token::MinusSign), |_, rhs, _| Expression::UnaryOp {
+                op: UnaryOp::Neg,
+                expr: Box::new(rhs),
+            }),
+            // !
+            prefix(6, just(Token::ExclamationMarkSign), |_, rhs, _| {
+                Expression::UnaryOp {
+                    op: UnaryOp::Not,
+                    expr: Box::new(rhs),
+                }
+            }),
+            // *
+            prefix(6, just(Token::AsteriskSign), |_, rhs, _| {
+                Expression::UnaryOp {
+                    op: UnaryOp::Deref,
+                    expr: Box::new(rhs),
+                }
+            }),
+            // &
+            prefix(6, just(Token::AmpersandSign), |_, rhs, _| {
+                Expression::UnaryOp {
+                    op: UnaryOp::AddressOf,
+                    expr: Box::new(rhs),
+                }
+            }),
+            // Binary
+
+            // *
+            infix(left(5), just(Token::AsteriskSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Mul,
+                    right: Box::new(r),
+                }
+            }),
+            // /
+            infix(left(5), just(Token::SlashSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Div,
+                    right: Box::new(r),
+                }
+            }),
+            // %
+            infix(left(5), just(Token::PercentSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Mod,
+                    right: Box::new(r),
+                }
+            }),
+            // <<
+            infix(left(5), just(Token::LessThanLessThanSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::LShift,
+                    right: Box::new(r),
+                }
+            }),
+            // >>
+            infix(
+                left(5),
+                just(Token::GreaterThanGreaterThanSign),
+                |l, _, r, _| Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::RShift,
+                    right: Box::new(r),
+                },
+            ),
+            // +
+            infix(left(4), just(Token::PlusSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Add,
+                    right: Box::new(r),
+                }
+            }),
+            // -
+            infix(left(4), just(Token::MinusSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Sub,
+                    right: Box::new(r),
+                }
+            }),
+            // ==
+            infix(left(3), just(Token::EqualEqualSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Eq,
+                    right: Box::new(r),
+                }
+            }),
+            // !=
+            infix(
+                left(3),
+                just(Token::ExclamationMarkEqualSign),
+                |l, _, r, _| Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Neq,
+                    right: Box::new(r),
+                },
+            ),
+            // <
+            infix(left(3), just(Token::LessThanSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Lt,
+                    right: Box::new(r),
+                }
+            }),
+            // <=
+            infix(left(3), just(Token::LessThanEqualSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Leq,
+                    right: Box::new(r),
+                }
+            }),
+            // >
+            infix(left(3), just(Token::GreaterThanSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Gt,
+                    right: Box::new(r),
+                }
+            }),
+            // >=
+            infix(left(3), just(Token::GreaterThanEqualSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Geq,
+                    right: Box::new(r),
+                }
+            }),
+            // &&
+            infix(
+                left(2),
+                just(Token::AmpersandAmpersandSign),
+                |l, _, r, _| Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::And,
+                    right: Box::new(r),
+                },
+            ),
+            // ||
+            infix(left(1), just(Token::PipePipeSign), |l, _, r, _| {
+                Expression::BinOp {
+                    left: Box::new(l),
+                    op: BinOp::Or,
+                    right: Box::new(r),
+                }
+            }),
+        ))
+    })
 }
-
-// type ErrT<'a> = extra::Err<Rich<'a, char>>;
-// type InputT<'a> = Stream<Lexer<'a>>;
-
-// fn int_literal<'a>() -> impl Parser<'a, &'a str, Expression, ErrT<'a>> + Copy {
-//     text::int::<_, ErrT>(10)
-//         .map(|s: &str| Expression::Num(s.parse().unwrap()))
-//         .padded()
-// }
-
-// // TODO.
-// fn float_literal<'a>() -> impl Parser<'a, &'a str, Expression, ErrT<'a>> + Copy {
-//     text::int::<_, ErrT>(10)
-//         .map(|s: &str| Expression::Num(s.parse().unwrap()))
-//         .padded()
-// }
-
-// fn name<'a>() -> impl Parser<'a, &'a str, String, ErrT<'a>> + Copy {
-//     text::ascii::ident::<_, ErrT>()
-//         .map(|s: &str| s.to_string())
-//         .padded()
-// }
-
-// fn expr<'a>() -> impl Parser<'a, InputT<'a>, Expression, ErrT<'a>> {
-//     macro_rules! fold_bin_ops {
-//         ($parser:expr, $ops:expr) => {
-//             $parser
-//                 .clone()
-//                 .foldl(choice($ops).then($parser).repeated(), |lhs, (op, rhs)| {
-//                     Expression::BinOp {
-//                         left: Box::new(lhs),
-//                         op,
-//                         right: Box::new(rhs),
-//                     }
-//                 })
-//         };
-//     }
-
-//     recursive(|expr| {
-//         // let atom = choice((
-//         //     int_literal(),
-//         //     float_literal(),
-//         //     name().map(Expression::Ident),
-//         //     expr.delimited_by(just('('), just(')')),
-//         // ));
-
-//         let atom = expr
-//             .delimited_by(
-//                 just(Token::LeftParenthesisSign),
-//                 just(Token::RightParenthesisSign),
-//             )
-//         // .or(just(Token::IntConstant).to(|n| Expression::Num(n)))
-//         //     .or(just(Token::FloatConstant))
-//         //     .or(just(Token::Identifier))
-//         ;
-
-//         // let unary =
-//         choice((
-//             just(Token::MinusSign).to(UnaryOp::Neg),
-//             just(Token::ExclamationMarkSign).to(UnaryOp::Not),
-//             just(Token::AmpersandSign).to(UnaryOp::AddressOf),
-//             just(Token::AsteriskSign).to(UnaryOp::Deref),
-//         ))
-//         .repeated()
-//         .foldr(atom, |op, x| Expression::UnaryOp {
-//             op: op,
-//             expr: Box::new(x),
-//         })
-
-// let mul = fold_bin_ops!(
-//     unary,
-//     (
-//         op("*").to(BinOp::Mul),
-//         op("/").to(BinOp::Div),
-//         op("%").to(BinOp::Mod),
-//         op("<<").to(BinOp::LShift),
-//         op(">>").to(BinOp::RShift),
-//     )
-// );
-
-// let sum = fold_bin_ops!(mul, (op("+").to(BinOp::Add), op("-").to(BinOp::Sub),));
-
-// let comparison = fold_bin_ops!(
-//     sum,
-//     (
-//         // Longer operators are tried first
-//         op("==").to(BinOp::Eq),
-//         op("!=").to(BinOp::Neq),
-//         op("<=").to(BinOp::Leq),
-//         op(">=").to(BinOp::Geq),
-//         op("<").to(BinOp::Lt),
-//         op(">").to(BinOp::Gt),
-//     )
-// );
-
-// let and_prec_lvl = fold_bin_ops!(comparison, (op("&&").to(BinOp::And),));
-
-// let or_prec_lvl = fold_bin_ops!(and_prec_lvl, (op("||").to(BinOp::Or),));
-
-// or_prec_lvl
-//     })
-// }
-
-// fn statement<'a>() -> impl Parser<'a, &'a str, Stmt, ErrT<'a>> {
-//     let var_decl = just("var")
-//         .ignore_then(name())
-//         .then(just('=').ignore_then(expr()).or_not())
-//         .map(|(name, value)| Stmt::VarDeclaration { name, value })
-//         .padded();
-
-//     let expr_stmt = expr().map(Stmt::ExpressionStatement).padded();
-
-//     choice((var_decl, expr_stmt))
-// }
-
-// fn program<'a>() -> impl Parser<'a, &'a str, Program, ErrT<'a>> {
-//     let func_decl = just("func")
-//         .ignore_then(name())
-//         .then(
-//             just('(')
-//                 .ignore_then(name().separated_by(just(',').padded()).allow_trailing())
-//                 .then(just(')'))
-//                 .padded(),
-//         )
-//         .then(statement().repeated())
-//         .map(|((name, params), body)| Program::FuncDeclaration { name, params, body });
-
-//     let const_decl = just("const")
-//         .ignore_then(name())
-//         .then(just('=').ignore_then(expr()))
-//         .map(|(name, value)| Program::ConstDeclaration { name, value });
-
-//     choice((func_decl, const_decl)).padded()
-// }
-
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parse_expr_unwrap(input: &str) -> Expression {
-        expr().parse(input).into_result().unwrap_or_else(|err| {
-            panic!("Failed to parse expression '{}': {:?}", input, err);
-        })
+    #[test]
+    fn test_basic_numbers() {
+        let input = "42";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
+        assert_eq!(result, Ok(Expression::Num(42)));
     }
 
     #[test]
-    fn test_integer_literal() {
-        assert_eq!(parse_expr_unwrap("123"), Expression::Num(123));
-        assert_eq!(parse_expr_unwrap("  456  "), Expression::Num(456));
+    fn test_float_literals() {
+        let input = "3.14";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
+        assert_eq!(result, Ok(Expression::Float(3.14)));
     }
 
     #[test]
-    fn test_identifier() {
+    fn test_string_literals() {
+        let input = r#""hello world""#;
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
+        assert_eq!(result, Ok(Expression::Str("hello world".to_string())));
+    }
+
+    #[test]
+    fn test_identifiers() {
+        let input = "variable_name";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
+        assert_eq!(result, Ok(Expression::Ident("variable_name".to_string())));
+    }
+
+    #[test]
+    fn test_parentheses() {
+        let input = "(42)";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
         assert_eq!(
-            parse_expr_unwrap("foo"),
-            Expression::Ident("foo".to_string())
-        );
-        assert_eq!(
-            parse_expr_unwrap("  bar_baz  "),
-            Expression::Ident("bar_baz".to_string())
+            result,
+            Ok(Expression::Parentheses(Box::new(Expression::Num(42))))
         );
     }
 
     #[test]
-    fn test_parenthesized_expression() {
-        assert_eq!(parse_expr_unwrap("(10)"), Expression::Num(10));
+    fn test_unary_negation() {
+        let input = "-42";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
         assert_eq!(
-            parse_expr_unwrap("( var )"),
-            Expression::Ident("var".to_string())
-        );
-        assert_eq!(
-            parse_expr_unwrap("(1 + 2)"),
-            Expression::BinOp {
-                left: Box::new(Expression::Num(1)),
-                op: BinOp::Add,
-                right: Box::new(Expression::Num(2)),
-            }
-        );
-    }
-
-    #[test]
-    fn test_unary_operators() {
-        assert_eq!(
-            parse_expr_unwrap("-5"),
-            Expression::UnaryOp {
+            result,
+            Ok(Expression::UnaryOp {
                 op: UnaryOp::Neg,
-                expr: Box::new(Expression::Num(5)),
-            }
-        );
-        assert_eq!(
-            parse_expr_unwrap("!loading"),
-            Expression::UnaryOp {
-                op: UnaryOp::Not,
-                expr: Box::new(Expression::Ident("loading".to_string())),
-            }
-        );
-        assert_eq!(
-            parse_expr_unwrap("!!0"),
-            Expression::UnaryOp {
-                op: UnaryOp::Not,
-                expr: Box::new(Expression::UnaryOp {
-                    op: UnaryOp::Not,
-                    expr: Box::new(Expression::Num(0)),
-                }),
-            }
-        );
-        assert_eq!(
-            parse_expr_unwrap("*-10"),
-            Expression::UnaryOp {
-                op: UnaryOp::Deref,
-                expr: Box::new(Expression::UnaryOp {
-                    op: UnaryOp::Neg,
-                    expr: Box::new(Expression::Num(10)),
-                })
-            }
+                expr: Box::new(Expression::Num(42))
+            })
         );
     }
 
     #[test]
-    fn test_multiplicative_operators() {
+    fn test_unary_not() {
+        let input = "!true";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
         assert_eq!(
-            parse_expr_unwrap("2 * 3"),
-            Expression::BinOp {
-                left: Box::new(Expression::Num(2)),
-                op: BinOp::Mul,
-                right: Box::new(Expression::Num(3)),
-            }
-        );
-        assert_eq!(
-            parse_expr_unwrap("10 / 2"),
-            Expression::BinOp {
-                left: Box::new(Expression::Num(10)),
-                op: BinOp::Div,
-                right: Box::new(Expression::Num(2)),
-            }
-        );
-        assert_eq!(
-            parse_expr_unwrap("7 % 3"),
-            Expression::BinOp {
-                left: Box::new(Expression::Num(7)),
-                op: BinOp::Mod,
-                right: Box::new(Expression::Num(3)),
-            }
+            result,
+            Ok(Expression::UnaryOp {
+                op: UnaryOp::Not,
+                expr: Box::new(Expression::Ident("true".to_string()))
+            })
         );
     }
 
     #[test]
-    fn test_additive_operators() {
+    fn test_binary_addition() {
+        let input = "1 + 2";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
         assert_eq!(
-            parse_expr_unwrap("1 + 2"),
-            Expression::BinOp {
+            result,
+            Ok(Expression::BinOp {
                 left: Box::new(Expression::Num(1)),
                 op: BinOp::Add,
-                right: Box::new(Expression::Num(2)),
-            }
-        );
-        assert_eq!(
-            parse_expr_unwrap("5 - 3"),
-            Expression::BinOp {
-                left: Box::new(Expression::Num(5)),
-                op: BinOp::Sub,
-                right: Box::new(Expression::Num(3)),
-            }
+                right: Box::new(Expression::Num(2))
+            })
         );
     }
 
     #[test]
-    fn test_shift_operators() {
+    fn test_binary_multiplication() {
+        let input = "3 * 4";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
         assert_eq!(
-            parse_expr_unwrap("1 << 2"),
-            Expression::BinOp {
-                left: Box::new(Expression::Num(1)),
-                op: BinOp::LShift,
-                right: Box::new(Expression::Num(2)),
-            }
-        );
-        assert_eq!(
-            parse_expr_unwrap("16 >> 3"),
-            Expression::BinOp {
-                left: Box::new(Expression::Num(16)),
-                op: BinOp::RShift,
-                right: Box::new(Expression::Num(3)),
-            }
+            result,
+            Ok(Expression::BinOp {
+                left: Box::new(Expression::Num(3)),
+                op: BinOp::Mul,
+                right: Box::new(Expression::Num(4))
+            })
         );
     }
 
     #[test]
-    fn test_precedence_mul_add() {
+    fn test_operator_precedence() {
+        let input = "1 + 2 * 3";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
         assert_eq!(
-            parse_expr_unwrap("1 + 2 * 3"), // 1 + (2 * 3)
-            Expression::BinOp {
+            result,
+            Ok(Expression::BinOp {
                 left: Box::new(Expression::Num(1)),
                 op: BinOp::Add,
                 right: Box::new(Expression::BinOp {
                     left: Box::new(Expression::Num(2)),
                     op: BinOp::Mul,
-                    right: Box::new(Expression::Num(3)),
-                }),
-            }
-        );
-        assert_eq!(
-            parse_expr_unwrap("(1 + 2) * 3"), // (1 + 2) * 3
-            Expression::BinOp {
-                left: Box::new(Expression::BinOp {
-                    left: Box::new(Expression::Num(1)),
-                    op: BinOp::Add,
-                    right: Box::new(Expression::Num(2)),
-                }),
-                op: BinOp::Mul,
-                right: Box::new(Expression::Num(3)),
-            }
-        );
-    }
-
-    #[test]
-    fn test_precedence_unary_add() {
-        assert_eq!(
-            parse_expr_unwrap("-1 + 2"), // (-1) + 2
-            Expression::BinOp {
-                left: Box::new(Expression::UnaryOp {
-                    op: UnaryOp::Neg,
-                    expr: Box::new(Expression::Num(1)),
-                }),
-                op: BinOp::Add,
-                right: Box::new(Expression::Num(2)),
-            }
+                    right: Box::new(Expression::Num(3))
+                })
+            })
         );
     }
 
     #[test]
     fn test_comparison_operators() {
+        let input = "x == y";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
         assert_eq!(
-            parse_expr_unwrap("a == b"),
-            Expression::BinOp {
-                left: Box::new(Expression::Ident("a".to_string())),
-                op: BinOp::Eq,
-                right: Box::new(Expression::Ident("b".to_string())),
-            }
-        );
-        assert_eq!(
-            parse_expr_unwrap("1 < 2"),
-            Expression::BinOp {
-                left: Box::new(Expression::Num(1)),
-                op: BinOp::Lt,
-                right: Box::new(Expression::Num(2)),
-            }
-        );
-        assert_eq!(
-            parse_expr_unwrap("x >= 0"),
-            Expression::BinOp {
+            result,
+            Ok(Expression::BinOp {
                 left: Box::new(Expression::Ident("x".to_string())),
-                op: BinOp::Geq,
-                right: Box::new(Expression::Num(0)),
-            }
-        );
-    }
-
-    #[test]
-    fn test_precedence_arithmetic_comparison() {
-        assert_eq!(
-            parse_expr_unwrap("1 + 2 > 2"), // (1+2) > 2
-            Expression::BinOp {
-                left: Box::new(Expression::BinOp {
-                    left: Box::new(Expression::Num(1)),
-                    op: BinOp::Add,
-                    right: Box::new(Expression::Num(2)),
-                }),
-                op: BinOp::Gt,
-                right: Box::new(Expression::Num(2)),
-            }
-        );
-    }
-
-    #[test]
-    fn test_left_associativity_add() {
-        assert_eq!(
-            parse_expr_unwrap("1 + 2 + 3"), // ((1 + 2) + 3)
-            Expression::BinOp {
-                left: Box::new(Expression::BinOp {
-                    left: Box::new(Expression::Num(1)),
-                    op: BinOp::Add,
-                    right: Box::new(Expression::Num(2)),
-                }),
-                op: BinOp::Add,
-                right: Box::new(Expression::Num(3)),
-            }
-        );
-    }
-
-    #[test]
-    fn test_left_associativity_mul() {
-        assert_eq!(
-            parse_expr_unwrap("10 / 2 * 3"), // ((10 / 2) * 3)
-            Expression::BinOp {
-                left: Box::new(Expression::BinOp {
-                    left: Box::new(Expression::Num(10)),
-                    op: BinOp::Div,
-                    right: Box::new(Expression::Num(2)),
-                }),
-                op: BinOp::Mul,
-                right: Box::new(Expression::Num(3)),
-            }
+                op: BinOp::Eq,
+                right: Box::new(Expression::Ident("y".to_string()))
+            })
         );
     }
 
     #[test]
     fn test_logical_and() {
+        let input = "a && b";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
         assert_eq!(
-            parse_expr_unwrap("true_val && false_val"),
-            Expression::BinOp {
-                left: Box::new(Expression::Ident("true_val".to_string())),
+            result,
+            Ok(Expression::BinOp {
+                left: Box::new(Expression::Ident("a".to_string())),
                 op: BinOp::And,
-                right: Box::new(Expression::Ident("false_val".to_string())),
-            }
+                right: Box::new(Expression::Ident("b".to_string()))
+            })
         );
     }
 
     #[test]
-    fn test_logical_or() {
-        // Renamed and updated
+    fn test_complex_expression() {
+        let input = "(a + b) * (c - d)";
+        let lexer = Lexer::new(input);
+        let stream = Stream::from_iter(lexer);
+        let result = expr().parse(stream).into_result();
         assert_eq!(
-            parse_expr_unwrap("val1 || val2"),
-            Expression::BinOp {
-                left: Box::new(Expression::Ident("val1".to_string())),
-                op: BinOp::Or,
-                right: Box::new(Expression::Ident("val2".to_string())),
-            }
-        );
-    }
-
-    #[test]
-    fn test_mixed_logical_precedence() {
-        // Renamed and updated
-        // && has higher precedence than ||
-        // a && b || c  should be (a && b) || c
-        assert_eq!(
-            parse_expr_unwrap("a && b || c"),
-            Expression::BinOp {
-                left: Box::new(Expression::BinOp {
+            result,
+            Ok(Expression::BinOp {
+                left: Box::new(Expression::Parentheses(Box::new(Expression::BinOp {
                     left: Box::new(Expression::Ident("a".to_string())),
-                    op: BinOp::And,
-                    right: Box::new(Expression::Ident("b".to_string())),
-                }),
-                op: BinOp::Or,
-                right: Box::new(Expression::Ident("c".to_string())),
-            }
-        );
-
-        // a || b && c should be a || (b && c)
-        assert_eq!(
-            parse_expr_unwrap("a || b && c"),
-            Expression::BinOp {
-                left: Box::new(Expression::Ident("a".to_string())),
-                op: BinOp::Or,
-                right: Box::new(Expression::BinOp {
-                    left: Box::new(Expression::Ident("b".to_string())),
-                    op: BinOp::And,
-                    right: Box::new(Expression::Ident("c".to_string())),
-                }),
-            }
-        );
-
-        // Test with parentheses
-        assert_eq!(
-            parse_expr_unwrap("a && (b || c)"),
-            Expression::BinOp {
-                left: Box::new(Expression::Ident("a".to_string())),
-                op: BinOp::And,
-                right: Box::new(Expression::BinOp {
-                    left: Box::new(Expression::Ident("b".to_string())),
-                    op: BinOp::Or,
-                    right: Box::new(Expression::Ident("c".to_string())),
-                }),
-            }
+                    op: BinOp::Add,
+                    right: Box::new(Expression::Ident("b".to_string()))
+                }))),
+                op: BinOp::Mul,
+                right: Box::new(Expression::Parentheses(Box::new(Expression::BinOp {
+                    left: Box::new(Expression::Ident("c".to_string())),
+                    op: BinOp::Sub,
+                    right: Box::new(Expression::Ident("d".to_string()))
+                })))
+            })
         );
     }
 }

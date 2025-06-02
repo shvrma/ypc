@@ -8,25 +8,8 @@ See *examples* directory for examples of the code.
 
 ```bnf
 
-decimal_digit => "0"..."9"
-decimal_digits => decimal_digit decimal_digits
-decimal_digits =>
-
-int_literal => "0"
-int_literal => "1"..."9" decimal_digits
-
-float_literal => "0" "." decimal_digits
-float_literal => "1"..."9" decimal_digits "." decimal_digits
-
-letter => "a"..."z"
-letter => "A"..."Z"
-name => letter name'
-name => "_" name'
-name' => letter name'
-name' => decimal_digit name'
-name' =>
-
-assignment_statement => "var" name "=" expr
+assignment_statement => "var" Ident Ident "=" expr
+assignment_statement => ident ":=" expr
 
 expr => int_literal
 expr => float_literal
@@ -60,5 +43,14 @@ mul_op => ">>"
 unary_op => "!"
 unary_op => "*"
 unary_op => "&"
+
+func_decl => "func" Ident "(" param_list ")" block
+
+param_list => param "," param_list'
+param_list' => "," param param_list'
+param_list' =>
+param => Ident Ident
+
+block 
 
 ```

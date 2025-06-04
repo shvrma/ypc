@@ -23,7 +23,9 @@ pub struct Args {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Args = argh::from_env();
 
-    let _ = std::fs::read_to_string(&args.input_file_path)?;
+    let prog = std::fs::read_to_string(&args.input_file_path)?;
+
+    let _ast = parser::parse(&prog);
 
     let _ = File::create(&args.output_file_path)?;
 

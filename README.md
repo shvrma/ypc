@@ -6,51 +6,71 @@ See *examples* directory for examples of the code.
 
 ## Currently recognizable grammar
 
-```bnf
+```ebnf
 
-assignment_statement => "var" Ident Ident "=" expr
-assignment_statement => ident ":=" expr
+program ::= { item } EOF
 
-expr => int_literal
-expr => float_literal
-expr => name
-expr => unary_op expr
-expr => expr binary_op expr
-expr => "(" expr ")"
+item ::= func_decl | const_decl
 
-binary_op => "||"
-binary_op => "&&"
-binary_op => rel_op
-binary_op => add_op
-binary_op => mul_op
+const_decl ::= "const" Identifier "=" expression
 
-rel_op => "=="
-rel_op => "!="
-rel_op => "<"
-rel_op => "<="
-rel_op => ">"
-rel_op => ">="
+func_decl ::= "func" Identifier func_params Identifier block
 
-add_op => "+"
-add_op => "-"
+func_params ::= "(" [ single_func_param { "," single_func_param } ] ")"
 
-mul_op => "*"
-mul_op => "/"
-mul_op => "%"
-mul_op => "<<"
-mul_op => ">>"
+single_func_param ::= Identifier Identifier  // param_name param_type
 
-unary_op => "!"
-unary_op => "*"
-unary_op => "&"
+block ::= "{" { statement } "}"
 
-func_decl => "func" Ident "(" param_list ")" block
+statement ::= semicolon_stmt
+            | var_decl
+            | if_else_stmt
+            | for_loop_stmt
+            | "break"
+            | "continue"
+            | return_stmt
+            | block_statement
+            | expression_statement
 
-param_list => param "," param_list'
-param_list' => "," param param_list'
-param_list' =>
-param => Ident Ident
+semicolon_stmt ::= ";"
 
-block 
+expression_statement ::= expression
+
+var_decl ::= "var" Identifier "=" expression
+
+if_else_stmt ::= "if" expression block [ "else" block ]
+
+for_loop_stmt ::= "for" var_decl ";" expression ";" expression block
+
+block_statement ::= block
+
+return_stmt ::= "return" expression
+
+expression ::= assignment | logical_or_expr
+
+assignment ::= logical_or_expr "=" expression
+
+logical_or_expr ::= logical_and_expr { "||" logical_and_expr }
+
+logical_and_expr ::= relational_expr { "&&" relational_expr }
+
+relational_expr ::= shift_expr { ( "==" | "!=" | "<" | "<=" | ">" | ">=" ) shift_expr }
+
+shift_expr ::= additive_expr { ( "<<" | ">>" ) additive_expr }
+
+additive_expr ::= multiplicative_expr { ( "+" | "-" ) multiplicative_expr }
+
+multiplicative_expr ::= unary_expr { ( "*" | "/" | "%" ) unary_expr }
+
+unary_expr ::= ( "-" | "!" | "*" | "&" ) unary_expr | primary_expr
+
+primary_expr ::= IntConstant
+               | FloatConstant
+               | StringLiteral
+               | Identifier
+               | func_call
+               | "(" expression ")"
+
+func_call ::= identifier "(" [ expression { "," expression } ] ")"
 
 ```

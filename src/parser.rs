@@ -1,22 +1,24 @@
+use std::ops::Range;
+
 use chumsky::{
-    IterParser, Parser,
+    IterParser, ParseResult, Parser,
     error::Rich,
     extra,
-    input::Stream,
-    prelude::{choice, just},
+    input::{Input, Stream, ValueInput},
+    prelude::{choice, end, just},
     recursive::recursive,
     select,
 };
+use logos::Logos;
 
-use crate::lexer::{Lexer, Token};
+use crate::lexer::Token;
 
-#[allow(dead_code)]
 #[derive(Debug, PartialEq)]
 pub enum Expression {
-    IntLiteral(u64),
-    FloatLiteral(f64),
-    StringLiteral(String),
-    Identifier(String),
+    IntConst(u64),
+    FloatConst(f64),
+    StringConst(String),
+    Variable(String),
     BinOp {
         left: Box<Expression>,
         op: BinOp,
@@ -27,7 +29,7 @@ pub enum Expression {
         expr: Box<Expression>,
     },
     FuncCall {
-        func: Box<Expression>,
+        func: String,
         args: Vec<Expression>,
     },
     ParenthisedExpr(Box<Expression>),
@@ -83,6 +85,8 @@ pub enum Statement {
         iter_expr: Expression,
         body: Block,
     },
+    Break,
+    Continue,
     BlockStatement(Block),
     ReturnStatement(Expression),
 }
@@ -91,29 +95,44 @@ pub enum Statement {
 pub struct Block(Vec<Statement>);
 
 #[derive(Debug, PartialEq)]
-pub struct FuncDecl {
-    pub name: String,
-    pub body: Block,
-    pub params: Vec<(String, String)>, // (param_name, param_type)
-    pub ret_type: String,
+pub enum Item {
+    FuncDecl {
+        name: String,
+        body: Block,
+        params: Vec<(String, String)>, // (param_name, param_type)
+        ret_type: String,
+    },
+    ConstDecl(String, Expression),
 }
 
-#[derive(Debug, PartialEq)]
-pub struct Program {
-    pub functions: Vec<FuncDecl>,
-}
-
-type ErrT<'a> = Rich<'a, Token<'a>>;
+type ErrT<'a> = Rich<'a, Token, SpanT>;
 type ExtraT<'a> = extra::Err<ErrT<'a>>;
-type InputT<'a> = Stream<Lexer<'a>>;
+type SpanT = Range<usize>;
 
-fn ident<'a>() -> impl Parser<'a, InputT<'a>, String, ExtraT<'a>> + Clone {
+fn into_parser_input<'a>(input: &'a str) -> impl ValueInput<'a, Token = Token, Span = SpanT> {
+    let token_iter = Token::lexer(input).spanned().map(|(tok, span)| match tok {
+        Ok(tok) => (tok, span),
+        Err(err) => (Token::MalformedToken(err), span),
+    });
+
+    Stream::from_iter(token_iter).map(input.len()..input.len(), |(t, s)| (t, s))
+}
+
+pub fn parse<'a>(input: &'a str) -> ParseResult<Vec<Item>, ErrT<'a>> {
+    let parser_input = into_parser_input(input);
+
+    items().parse(parser_input)
+}
+
+fn ident<'a, I: ValueInput<'a, Token = Token, Span = SpanT>>()
+-> impl Parser<'a, I, String, ExtraT<'a>> + Clone {
     select! {
         Token::Identifier(name) => name.to_string()
     }
 }
 
-fn block<'a>() -> impl Parser<'a, InputT<'a>, Block, ExtraT<'a>> + Clone {
+fn block<'a, I: ValueInput<'a, Token = Token, Span = SpanT>>()
+-> impl Parser<'a, I, Block, ExtraT<'a>> + Clone {
     recursive(|block| {
         let semicolon_stmt = just(Token::SemicolonSign).map(|_| Statement::SemicolonStatement);
 
@@ -165,38 +184,62 @@ fn block<'a>() -> impl Parser<'a, InputT<'a>, Block, ExtraT<'a>> + Clone {
             for_loop_stmt,
             inner_block,
             return_stmt,
+            just(Token::BreakKeyword).map(|_| Statement::Break),
+            just(Token::ContinueKeyword).map(|_| Statement::Continue),
         ))
         .labelled("statement")
         .repeated()
         .collect::<Vec<_>>()
-        .map(|stmts| Block(stmts))
         .delimited_by(
             just(Token::LeftFigureBracketSign),
             just(Token::RightFigureBracketSign),
         )
+        .map(|stmts| Block(stmts))
     })
     .labelled("block")
 }
 
-fn expr<'a>() -> impl Parser<'a, InputT<'a>, Expression, ExtraT<'a>> + Clone {
+fn expr<'a, I: ValueInput<'a, Token = Token, Span = SpanT>>()
+-> impl Parser<'a, I, Expression, ExtraT<'a>> + Clone {
     recursive(|expr| {
-        let atom = select! {
-            Token::IntConstant(n) => Expression::IntLiteral(n),
-            Token::FloatConstant(f) => Expression::FloatLiteral(f),
-            Token::StringLiteral(s) => Expression::StringLiteral(s.to_string()),
-            Token::Identifier(i) => Expression::Identifier(i.to_string()),
+        let consts_or_var_atom = select! {
+            Token::IntConstant(n) => Expression::IntConst(n),
+            Token::FloatConstant(f) => Expression::FloatConst(f),
+            Token::StringLiteral(s) => Expression::StringConst(s.to_string()),
+            Token::Identifier(i) => Expression::Variable(i.to_string()),
         };
-        let atom = atom.or(expr
+
+        let func_call_atom = ident()
+            .then(
+                expr.clone()
+                    .separated_by(just(Token::CommaSign))
+                    .collect::<Vec<_>>()
+                    .delimited_by(
+                        just(Token::LeftParenthesisSign),
+                        just(Token::RightParenthesisSign),
+                    ),
+            )
+            .map(|(func, args)| Expression::FuncCall { func, args });
+
+        let parantherised_atom = expr
+            .clone()
             .delimited_by(
                 just(Token::LeftParenthesisSign),
                 just(Token::RightParenthesisSign),
             )
-            .map(|inner_expr| Expression::ParenthisedExpr(Box::new(inner_expr))));
+            .map(|inner_expr| Expression::ParenthisedExpr(Box::new(inner_expr)));
 
-        use chumsky::pratt::{infix, left, prefix};
+        let atom = choice((func_call_atom, consts_or_var_atom, parantherised_atom));
 
+        use chumsky::pratt::{infix, left, prefix, right};
         atom.pratt((
-            // Unary
+            // =
+            infix(right(0), just(Token::EqualSign), |l, _, r, _| {
+                Expression::Assignment {
+                    left: Box::new(l),
+                    right: Box::new(r),
+                }
+            }),
             // -
             prefix(6, just(Token::MinusSign), |_, rhs, _| Expression::UnaryOp {
                 op: UnaryOp::Neg,
@@ -223,7 +266,6 @@ fn expr<'a>() -> impl Parser<'a, InputT<'a>, Expression, ExtraT<'a>> + Clone {
                     expr: Box::new(rhs),
                 }
             }),
-            // Binary
             // *
             infix(left(5), just(Token::AsteriskSign), |l, _, r, _| {
                 Expression::BinOp {
@@ -355,7 +397,8 @@ fn expr<'a>() -> impl Parser<'a, InputT<'a>, Expression, ExtraT<'a>> + Clone {
     .labelled("expr")
 }
 
-fn func_decl<'a>() -> impl Parser<'a, InputT<'a>, FuncDecl, ExtraT<'a>> + Clone {
+fn item<'a, I: ValueInput<'a, Token = Token, Span = SpanT>>()
+-> impl Parser<'a, I, Item, ExtraT<'a>> + Clone {
     let single_func_param = ident()
         .labelled("param name")
         .clone()
@@ -375,486 +418,887 @@ fn func_decl<'a>() -> impl Parser<'a, InputT<'a>, FuncDecl, ExtraT<'a>> + Clone 
                 .collect::<Vec<_>>()
         });
 
-    just(Token::FuncKeyword)
+    let func_decl = just(Token::FuncKeyword)
         .ignore_then(ident())
         .then(func_params)
         .then(ident().labelled("return type"))
         .then(block())
-        .map(|(((name, params), ret_type), body)| FuncDecl {
+        .map(|(((name, params), ret_type), body)| Item::FuncDecl {
             name,
             params,
             ret_type,
             body,
         })
-        .labelled("function declaration")
+        .labelled("function declaration");
+
+    let const_decl = just(Token::ConstKeyword)
+        .ignore_then(ident())
+        .then_ignore(just(Token::EqualSign))
+        .then(expr())
+        .map(|(name, value)| Item::ConstDecl(name, value));
+
+    choice((func_decl, const_decl)).labelled("item")
 }
 
-fn program<'a>() -> impl Parser<'a, InputT<'a>, Program, ExtraT<'a>> + Clone {
-    func_decl()
+fn items<'a, I: ValueInput<'a, Token = Token, Span = SpanT>>()
+-> impl Parser<'a, I, Vec<Item>, ExtraT<'a>> + Clone {
+    item()
         .repeated()
         .collect::<Vec<_>>()
-        .map(|functions| Program { functions })
-}
-
-pub fn parse<'a>(input: &'a str) -> Result<Program, Vec<ErrT<'a>>> {
-    let lexer = Lexer::new(input);
-    let stream = Stream::from_iter(lexer);
-
-    program().parse(stream).into_result()
+        .then_ignore(end())
+        .labelled("items")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn parse_using<'a, P, O>(parser: P, input: &'a str) -> Result<O, Vec<ErrT<'a>>>
-    where
-        P: Parser<'a, InputT<'a>, O, ExtraT<'a>> + Clone,
-        O: std::fmt::Debug + PartialEq,
-    {
-        let lexer = Lexer::new(input);
-        let stream = Stream::from_iter(lexer);
-        parser.parse(stream).into_result()
-    }
-
     #[test]
     fn test_expr_int_literal() {
-        let result = parse_using(expr(), "123");
+        let result = expr().parse(into_parser_input("123")).unwrap();
 
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), Expression::IntLiteral(123));
+        assert_eq!(result, Expression::IntConst(123));
     }
 
     #[test]
     fn test_expr_float_literal() {
-        let result = parse_using(expr(), "123.45");
+        let result = expr().parse(into_parser_input("123.45")).unwrap();
 
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), Expression::FloatLiteral(123.45));
+        assert_eq!(result, Expression::FloatConst(123.45));
     }
 
     #[test]
     fn test_expr_string_literal() {
-        let result = parse_using(expr(), "\"hello world\"");
+        let result = expr().parse(into_parser_input("\"hello world\"")).unwrap();
 
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Expression::StringLiteral("hello world".to_string())
-        );
+        assert_eq!(result, Expression::StringConst("hello world".to_string()));
     }
 
     #[test]
-    fn test_expr_identifier() {
-        let result = parse_using(expr(), "my_var");
+    fn test_expr_variable() {
+        let result = expr().parse(into_parser_input("counter")).unwrap();
 
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Expression::Identifier("my_var".to_string())
-        );
+        assert_eq!(result, Expression::Variable("counter".to_string()));
     }
 
     #[test]
-    fn test_expr_parenthesized() {
-        let result = parse_using(expr(), "(1 + 2)");
+    fn test_expr_func_call_no_args() {
+        let result = expr().parse(into_parser_input("doSomething()")).unwrap();
 
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
         assert_eq!(
-            result.unwrap(),
-            Expression::ParenthisedExpr(Box::new(Expression::BinOp {
-                left: Box::new(Expression::IntLiteral(1)),
-                op: BinOp::Add,
-                right: Box::new(Expression::IntLiteral(2)),
-            }))
-        );
-    }
-
-    #[test]
-    fn test_expr_unary_negation() {
-        let result = parse_using(expr(), "-x");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Expression::UnaryOp {
-                op: UnaryOp::Neg,
-                expr: Box::new(Expression::Identifier("x".to_string())),
+            result,
+            Expression::FuncCall {
+                func: "doSomething".to_string(),
+                args: vec![]
             }
         );
     }
 
     #[test]
-    fn test_expr_unary_not() {
-        let result = parse_using(expr(), "!y");
+    fn test_expr_func_call_with_args() {
+        let result = expr()
+            .parse(into_parser_input("calculate(1, x, \"test\")"))
+            .unwrap();
 
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
         assert_eq!(
-            result.unwrap(),
-            Expression::UnaryOp {
-                op: UnaryOp::Not,
-                expr: Box::new(Expression::Identifier("y".to_string())),
-            }
-        );
-    }
-
-    #[test]
-    fn test_expr_binary_addition() {
-        let result = parse_using(expr(), "1 + 2");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Expression::BinOp {
-                left: Box::new(Expression::IntLiteral(1)),
-                op: BinOp::Add,
-                right: Box::new(Expression::IntLiteral(2)),
-            }
-        );
-    }
-
-    #[test]
-    fn test_expr_operator_precedence() {
-        // 1 + 2 * 3 should be 1 + (2 * 3)
-        let result = parse_using(expr(), "1 + 2 * 3");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Expression::BinOp {
-                left: Box::new(Expression::IntLiteral(1)),
-                op: BinOp::Add,
-                right: Box::new(Expression::BinOp {
-                    left: Box::new(Expression::IntLiteral(2)),
-                    op: BinOp::Mul,
-                    right: Box::new(Expression::IntLiteral(3)),
-                }),
-            }
-        );
-    }
-
-    #[test]
-    fn test_expr_left_associativity() {
-        // 1 - 2 - 3 should be (1 - 2) - 3
-        let result = parse_using(expr(), "1 - 2 - 3");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Expression::BinOp {
-                left: Box::new(Expression::BinOp {
-                    left: Box::new(Expression::IntLiteral(1)),
-                    op: BinOp::Sub,
-                    right: Box::new(Expression::IntLiteral(2)),
-                }),
-                op: BinOp::Sub,
-                right: Box::new(Expression::IntLiteral(3)),
-            }
-        );
-    }
-
-    #[test]
-    fn test_block_empty() {
-        let result = parse_using(block(), "{}");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(result.unwrap(), Block(vec![]));
-    }
-
-    #[test]
-    fn test_block_single_expression_statement() {
-        let result = parse_using(block(), "{ 123 }");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Block(vec![Statement::ExpressionStatement(
-                Expression::IntLiteral(123)
-            )])
-        );
-    }
-
-    #[test]
-    fn test_block_expr_stmt_and_semicolon_stmt() {
-        let result = parse_using(block(), "{ 123; }");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Block(vec![
-                Statement::ExpressionStatement(Expression::IntLiteral(123)),
-                Statement::SemicolonStatement,
-            ])
-        );
-    }
-
-    #[test]
-    fn test_block_var_declaration() {
-        let result = parse_using(block(), "{ var x = 10; }");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Block(vec![
-                Statement::VarDecl {
-                    name: "x".to_string(),
-                    init_expr: Expression::IntLiteral(10),
-                },
-                Statement::SemicolonStatement,
-            ])
-        );
-    }
-
-    #[test]
-    fn test_block_if_statement() {
-        let result = parse_using(block(), "{ if 1 { 2 } }");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Block(vec![Statement::IfStatement {
-                condition: Expression::IntLiteral(1),
-                body: Block(vec![Statement::ExpressionStatement(
-                    Expression::IntLiteral(2)
-                )]),
-                else_body: None,
-            }])
-        );
-    }
-
-    #[test]
-    fn test_block_if_else_statement() {
-        let result = parse_using(block(), "{ if 1 { 2 } else { 3 } }");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Block(vec![Statement::IfStatement {
-                condition: Expression::IntLiteral(1),
-                body: Block(vec![Statement::ExpressionStatement(
-                    Expression::IntLiteral(2)
-                )]),
-                else_body: Some(Block(vec![Statement::ExpressionStatement(
-                    Expression::IntLiteral(3)
-                )])),
-            }])
-        );
-    }
-
-    #[test]
-    fn test_block_for_loop_statement() {
-        let result = parse_using(block(), "{ for var i = 0; i < 10; i + 1 { 1 } }");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Block(vec![Statement::ForLoop {
-                var_decl: Box::new(Statement::VarDecl {
-                    name: "i".to_string(),
-                    init_expr: Expression::IntLiteral(0),
-                }),
-                cond_expr: Expression::BinOp {
-                    left: Box::new(Expression::Identifier("i".to_string())),
-                    op: BinOp::Lt,
-                    right: Box::new(Expression::IntLiteral(10)),
-                },
-                iter_expr: Expression::BinOp {
-                    left: Box::new(Expression::Identifier("i".to_string())),
-                    op: BinOp::Add,
-                    right: Box::new(Expression::IntLiteral(1)),
-                },
-                body: Block(vec![Statement::ExpressionStatement(
-                    Expression::IntLiteral(1)
-                )]),
-            }])
-        );
-    }
-
-    #[test]
-    fn test_block_return_statement() {
-        let result = parse_using(block(), "{ return x; }");
-
-        assert!(result.is_ok(), "Expected Ok, got Err: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Block(vec![
-                Statement::ReturnStatement(Expression::Identifier("x".to_string())),
-                Statement::SemicolonStatement, // Semicolon is parsed as a separate statement after return
-            ])
-        );
-    }
-
-    #[test]
-    fn test_func_decl_simple() {
-        let result = parse_using(func_decl(), "func main() void {}");
-
-        assert!(result.is_ok(), "Parse error: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            FuncDecl {
-                name: "main".to_string(),
-                params: vec![],
-                ret_type: "void".to_string(),
-                body: Block(vec![]),
-            }
-        );
-    }
-
-    #[test]
-    fn test_func_decl_with_params() {
-        let result = parse_using(func_decl(), "func add(a int, b str) number {}");
-
-        assert!(result.is_ok(), "Parse error: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            FuncDecl {
-                name: "add".to_string(),
-                params: vec![
-                    ("a".to_string(), "int".to_string()),
-                    ("b".to_string(), "str".to_string())
-                ],
-                ret_type: "number".to_string(),
-                body: Block(vec![]),
-            }
-        );
-    }
-
-    #[test]
-    fn test_func_decl_with_body_statements() {
-        let result = parse_using(func_decl(), "func compute() int { var x = 1; return x; }");
-
-        assert!(result.is_ok(), "Parse error: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            FuncDecl {
-                name: "compute".to_string(),
-                params: vec![],
-                ret_type: "int".to_string(),
-                body: Block(vec![
-                    Statement::VarDecl {
-                        name: "x".to_string(),
-                        init_expr: Expression::IntLiteral(1)
-                    },
-                    Statement::SemicolonStatement,
-                    Statement::ReturnStatement(Expression::Identifier("x".to_string())),
-                    Statement::SemicolonStatement,
-                ]),
-            }
-        );
-    }
-
-    #[test]
-    fn test_func_decl_with_complex_body() {
-        let result = parse_using(
-            func_decl(),
-            "func complex(n int) int { if n > 0 { return n; } else { return 0; } }",
-        );
-
-        assert!(result.is_ok(), "Parse error: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            FuncDecl {
-                name: "complex".to_string(),
-                params: vec![("n".to_string(), "int".to_string())],
-                ret_type: "int".to_string(),
-                body: Block(vec![Statement::IfStatement {
-                    condition: Expression::BinOp {
-                        left: Box::new(Expression::Identifier("n".to_string())),
-                        op: BinOp::Gt,
-                        right: Box::new(Expression::IntLiteral(0)),
-                    },
-                    body: Block(vec![
-                        Statement::ReturnStatement(Expression::Identifier("n".to_string())),
-                        Statement::SemicolonStatement,
-                    ]),
-                    else_body: Some(Block(vec![
-                        Statement::ReturnStatement(Expression::IntLiteral(0)),
-                        Statement::SemicolonStatement,
-                    ])),
-                }]),
-            }
-        );
-    }
-
-    #[test]
-    fn test_program_empty_input() {
-        let result = parse("");
-        assert!(result.is_ok(), "Parse error: {:?}", result.err());
-        assert_eq!(result.unwrap(), Program { functions: vec![] });
-    }
-
-    #[test]
-    fn test_program_single_function() {
-        let input = "func main() void {}";
-        let result = parse(input);
-        assert!(result.is_ok(), "Parse error: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Program {
-                functions: vec![FuncDecl {
-                    name: "main".to_string(),
-                    params: vec![],
-                    ret_type: "void".to_string(),
-                    body: Block(vec![]),
-                }]
-            }
-        );
-    }
-
-    #[test]
-    fn test_program_multiple_functions() {
-        let input = "func first() int {} func second() bool {}";
-        let result = parse(input);
-        assert!(result.is_ok(), "Parse error: {:?}", result.err());
-        assert_eq!(
-            result.unwrap(),
-            Program {
-                functions: vec![
-                    FuncDecl {
-                        name: "first".to_string(),
-                        params: vec![],
-                        ret_type: "int".to_string(),
-                        body: Block(vec![]),
-                    },
-                    FuncDecl {
-                        name: "second".to_string(),
-                        params: vec![],
-                        ret_type: "bool".to_string(),
-                        body: Block(vec![]),
-                    }
+            result,
+            Expression::FuncCall {
+                func: "calculate".to_string(),
+                args: vec![
+                    Expression::IntConst(1),
+                    Expression::Variable("x".to_string()),
+                    Expression::StringConst("test".to_string())
                 ]
             }
         );
     }
 
     #[test]
-    fn test_program_function_with_complex_body() {
-        let input = "func test() void { if 1 { var x = 10; } else { return 0; } }";
-        let result = parse(input);
-        assert!(result.is_ok(), "Parse error: {:?}", result.err());
+    fn test_expr_parenthesized() {
+        let result = expr().parse(into_parser_input("(10 + foo)")).unwrap();
+
         assert_eq!(
-            result.unwrap(),
-            Program {
-                functions: vec![FuncDecl {
-                    name: "test".to_string(),
-                    params: vec![],
-                    ret_type: "void".to_string(),
-                    body: Block(vec![Statement::IfStatement {
-                        condition: Expression::IntLiteral(1),
-                        body: Block(vec![
-                            Statement::VarDecl {
-                                name: "x".to_string(),
-                                init_expr: Expression::IntLiteral(10)
-                            },
-                            Statement::SemicolonStatement,
-                        ]),
-                        else_body: Some(Block(vec![
-                            Statement::ReturnStatement(Expression::IntLiteral(0)),
-                            Statement::SemicolonStatement,
-                        ])),
-                    }]),
-                }]
+            result,
+            Expression::ParenthisedExpr(Box::new(Expression::BinOp {
+                left: Box::new(Expression::IntConst(10)),
+                op: BinOp::Add,
+                right: Box::new(Expression::Variable("foo".to_string()))
+            }))
+        );
+    }
+
+    #[test]
+    fn test_expr_assignment() {
+        let result = expr().parse(into_parser_input("value = 100")).unwrap();
+
+        assert_eq!(
+            result,
+            Expression::Assignment {
+                left: Box::new(Expression::Variable("value".to_string())),
+                right: Box::new(Expression::IntConst(100))
             }
         );
+    }
+
+    #[test]
+    fn test_expr_unary_neg() {
+        let result = expr().parse(into_parser_input("-val")).unwrap();
+
+        assert_eq!(
+            result,
+            Expression::UnaryOp {
+                op: UnaryOp::Neg,
+                expr: Box::new(Expression::Variable("val".to_string()))
+            }
+        );
+    }
+
+    #[test]
+    fn test_expr_unary_not() {
+        let result = expr().parse(into_parser_input("!isValid")).unwrap();
+
+        assert_eq!(
+            result,
+            Expression::UnaryOp {
+                op: UnaryOp::Not,
+                expr: Box::new(Expression::Variable("isValid".to_string()))
+            }
+        );
+    }
+
+    #[test]
+    fn test_expr_unary_deref() {
+        let result = expr().parse(into_parser_input("*ptr")).unwrap();
+
+        assert_eq!(
+            result,
+            Expression::UnaryOp {
+                op: UnaryOp::Deref,
+                expr: Box::new(Expression::Variable("ptr".to_string()))
+            }
+        );
+    }
+
+    #[test]
+    fn test_expr_unary_address_of() {
+        let result = expr().parse(into_parser_input("&myVar")).unwrap();
+
+        assert_eq!(
+            result,
+            Expression::UnaryOp {
+                op: UnaryOp::AddressOf,
+                expr: Box::new(Expression::Variable("myVar".to_string()))
+            }
+        );
+    }
+
+    #[test]
+    fn test_expr_bin_op_precedence() {
+        // a + b * c -> a + (b * c)
+        let result = expr().parse(into_parser_input("a + b * c")).unwrap();
+
+        assert_eq!(
+            result,
+            Expression::BinOp {
+                left: Box::new(Expression::Variable("a".to_string())),
+                op: BinOp::Add,
+                right: Box::new(Expression::BinOp {
+                    left: Box::new(Expression::Variable("b".to_string())),
+                    op: BinOp::Mul,
+                    right: Box::new(Expression::Variable("c".to_string()))
+                })
+            }
+        );
+    }
+
+    #[test]
+    fn test_expr_bin_op_associativity() {
+        // a - b - c -> (a - b) - c
+        let result = expr().parse(into_parser_input("a - b - c")).unwrap();
+
+        assert_eq!(
+            result,
+            Expression::BinOp {
+                left: Box::new(Expression::BinOp {
+                    left: Box::new(Expression::Variable("a".to_string())),
+                    op: BinOp::Sub,
+                    right: Box::new(Expression::Variable("b".to_string()))
+                }),
+                op: BinOp::Sub,
+                right: Box::new(Expression::Variable("c".to_string()))
+            }
+        );
+    }
+
+    #[test]
+    fn test_expr_assignment_associativity() {
+        // a = b = c -> a = (b = c)
+        let result = expr().parse(into_parser_input("a = b = c")).unwrap();
+
+        assert_eq!(
+            result,
+            Expression::Assignment {
+                left: Box::new(Expression::Variable("a".to_string())),
+                right: Box::new(Expression::Assignment {
+                    left: Box::new(Expression::Variable("b".to_string())),
+                    right: Box::new(Expression::Variable("c".to_string())),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn test_block_empty() {
+        let result = block().parse(into_parser_input("{}")).unwrap();
+
+        assert_eq!(result, Block(vec![]));
+    }
+
+    #[test]
+    fn test_block_semicolon_statement() {
+        let result = block().parse(into_parser_input("{;}")).unwrap();
+
+        assert_eq!(result, Block(vec![Statement::SemicolonStatement]));
+    }
+
+    #[test]
+    fn test_block_expr_statement() {
+        let result = block().parse(into_parser_input("{ compute() }")).unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![Statement::ExpressionStatement(Expression::FuncCall {
+                func: "compute".to_string(),
+                args: vec![]
+            })])
+        );
+    }
+
+    #[test]
+    fn test_block_expr_statement_followed_by_semicolon() {
+        let result = block().parse(into_parser_input("{ compute(); }")).unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![
+                Statement::ExpressionStatement(Expression::FuncCall {
+                    func: "compute".to_string(),
+                    args: vec![]
+                }),
+                Statement::SemicolonStatement
+            ])
+        );
+    }
+
+    #[test]
+    fn test_block_var_decl() {
+        let result = block()
+            .parse(into_parser_input("{ var count = 0 }"))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![Statement::VarDecl {
+                name: "count".to_string(),
+                init_expr: Expression::IntConst(0)
+            }])
+        );
+    }
+
+    #[test]
+    fn test_block_var_decl_followed_by_semicolon() {
+        let result = block()
+            .parse(into_parser_input("{ var count = 0; }"))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![
+                Statement::VarDecl {
+                    name: "count".to_string(),
+                    init_expr: Expression::IntConst(0)
+                },
+                Statement::SemicolonStatement
+            ])
+        );
+    }
+
+    #[test]
+    fn test_block_if_statement() {
+        let result = block()
+            .parse(into_parser_input("{ if x > 0 { x = 0 } }"))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![Statement::IfStatement {
+                condition: Expression::BinOp {
+                    left: Box::new(Expression::Variable("x".to_string())),
+                    op: BinOp::Gt,
+                    right: Box::new(Expression::IntConst(0))
+                },
+                body: Block(vec![Statement::ExpressionStatement(
+                    Expression::Assignment {
+                        left: Box::new(Expression::Variable("x".to_string())),
+                        right: Box::new(Expression::IntConst(0))
+                    }
+                )]),
+                else_body: None
+            }])
+        );
+    }
+
+    #[test]
+    fn test_block_if_else_statement() {
+        let result = block()
+            .parse(into_parser_input("{ if x { call1() } else { call2() } }"))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![Statement::IfStatement {
+                condition: Expression::Variable("x".to_string()),
+                body: Block(vec![Statement::ExpressionStatement(Expression::FuncCall {
+                    func: "call1".to_string(),
+                    args: vec![]
+                })]),
+                else_body: Some(Block(vec![Statement::ExpressionStatement(
+                    Expression::FuncCall {
+                        func: "call2".to_string(),
+                        args: vec![]
+                    }
+                )]))
+            }])
+        );
+    }
+
+    #[test]
+    fn test_block_for_loop_statement() {
+        let input = "{ for var i = 0; i < 10; i = i + 1 { print(i); } }";
+        let result = block().parse(into_parser_input(input)).unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![Statement::ForLoop {
+                var_decl: Box::new(Statement::VarDecl {
+                    name: "i".to_string(),
+                    init_expr: Expression::IntConst(0)
+                }),
+                cond_expr: Expression::BinOp {
+                    left: Box::new(Expression::Variable("i".to_string())),
+                    op: BinOp::Lt,
+                    right: Box::new(Expression::IntConst(10))
+                },
+                iter_expr: Expression::Assignment {
+                    left: Box::new(Expression::Variable("i".to_string())),
+                    right: Box::new(Expression::BinOp {
+                        left: Box::new(Expression::Variable("i".to_string())),
+                        op: BinOp::Add,
+                        right: Box::new(Expression::IntConst(1))
+                    })
+                },
+                body: Block(vec![
+                    Statement::ExpressionStatement(Expression::FuncCall {
+                        func: "print".to_string(),
+                        args: vec![Expression::Variable("i".to_string())]
+                    }),
+                    Statement::SemicolonStatement
+                ])
+            }])
+        );
+    }
+
+    #[test]
+    fn test_block_return_statement() {
+        let result = block()
+            .parse(into_parser_input("{ return x * x }"))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![Statement::ReturnStatement(Expression::BinOp {
+                left: Box::new(Expression::Variable("x".to_string())),
+                op: BinOp::Mul,
+                right: Box::new(Expression::Variable("x".to_string()))
+            })])
+        );
+    }
+
+    #[test]
+    fn test_block_return_statement_followed_by_semicolon() {
+        let result = block()
+            .parse(into_parser_input("{ return x * x; }"))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![
+                Statement::ReturnStatement(Expression::BinOp {
+                    left: Box::new(Expression::Variable("x".to_string())),
+                    op: BinOp::Mul,
+                    right: Box::new(Expression::Variable("x".to_string()))
+                }),
+                Statement::SemicolonStatement
+            ])
+        );
+    }
+
+    #[test]
+    fn test_block_nested_block() {
+        let result = block()
+            .parse(into_parser_input("{ { var inner = 1; } }"))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![Statement::BlockStatement(Block(vec![
+                Statement::VarDecl {
+                    name: "inner".to_string(),
+                    init_expr: Expression::IntConst(1)
+                },
+                Statement::SemicolonStatement
+            ]))])
+        );
+    }
+
+    #[test]
+    fn test_block_multiple_statements() {
+        let input = "{ var a = 1; var b = 2; return a + b; }";
+        let result = block().parse(into_parser_input(input)).unwrap();
+
+        assert_eq!(
+            result,
+            Block(vec![
+                Statement::VarDecl {
+                    name: "a".to_string(),
+                    init_expr: Expression::IntConst(1)
+                },
+                Statement::SemicolonStatement,
+                Statement::VarDecl {
+                    name: "b".to_string(),
+                    init_expr: Expression::IntConst(2)
+                },
+                Statement::SemicolonStatement,
+                Statement::ReturnStatement(Expression::BinOp {
+                    left: Box::new(Expression::Variable("a".to_string())),
+                    op: BinOp::Add,
+                    right: Box::new(Expression::Variable("b".to_string()))
+                }),
+                Statement::SemicolonStatement,
+            ])
+        );
+    }
+
+    #[test]
+    fn test_item_const_decl() {
+        let result = item()
+            .parse(into_parser_input("const MAX_VALUE = 1000"))
+            .unwrap();
+        assert_eq!(
+            result,
+            Item::ConstDecl("MAX_VALUE".to_string(), Expression::IntConst(1000))
+        );
+    }
+
+    #[test]
+    fn test_item_func_decl_no_params_no_body() {
+        let result = item()
+            .parse(into_parser_input("func doNothing() void { }"))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Item::FuncDecl {
+                name: "doNothing".to_string(),
+                params: vec![],
+                ret_type: "void".to_string(),
+                body: Block(vec![])
+            }
+        );
+    }
+
+    #[test]
+    fn test_item_func_decl_with_params_and_body() {
+        let input = "func add(x int, y int) int { return x + y; }";
+        let result = item().parse(into_parser_input(input)).unwrap();
+
+        assert_eq!(
+            result,
+            Item::FuncDecl {
+                name: "add".to_string(),
+                params: vec![
+                    ("x".to_string(), "int".to_string()),
+                    ("y".to_string(), "int".to_string())
+                ],
+                ret_type: "int".to_string(),
+                body: Block(vec![
+                    Statement::ReturnStatement(Expression::BinOp {
+                        left: Box::new(Expression::Variable("x".to_string())),
+                        op: BinOp::Add,
+                        right: Box::new(Expression::Variable("y".to_string()))
+                    }),
+                    Statement::SemicolonStatement
+                ])
+            }
+        );
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let result = parse("").unwrap();
+        assert_eq!(result, vec![]);
+    }
+
+    #[test]
+    fn test_single_const() {
+        let result = parse("const PI = 3.14159").unwrap();
+
+        assert_eq!(
+            result,
+            vec![Item::ConstDecl(
+                "PI".to_string(),
+                Expression::FloatConst(3.14159)
+            )]
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_single_const_with_trailing_semicolon_is_error() {
+        parse("const X = 1;").unwrap();
+    }
+
+    #[test]
+    fn test_single_func() {
+        let result = parse("func main() void { }").unwrap();
+
+        assert_eq!(
+            result,
+            vec![Item::FuncDecl {
+                name: "main".to_string(),
+                params: vec![],
+                ret_type: "void".to_string(),
+                body: Block(vec![])
+            }]
+        );
+    }
+
+    #[test]
+    fn test_multiple_items() {
+        let input = r#"
+            const VERSION = 1.0
+
+            func start() void {
+                var initialized = 1;
+            }
+
+            const AUTHOR = "O. Piskovyi"
+        "#;
+        let result = parse(input).unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Item::ConstDecl("VERSION".to_string(), Expression::FloatConst(1.0)),
+                Item::FuncDecl {
+                    name: "start".to_string(),
+                    params: vec![],
+                    ret_type: "void".to_string(),
+                    body: Block(vec![
+                        Statement::VarDecl {
+                            name: "initialized".to_string(),
+                            init_expr: Expression::IntConst(1)
+                        },
+                        Statement::SemicolonStatement
+                    ])
+                },
+                Item::ConstDecl(
+                    "AUTHOR".to_string(),
+                    Expression::StringConst("O. Piskovyi".to_string())
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_full_program() {
+        let input = r#"
+            const GREETING = "Hello"
+
+            func combine(s1 string, s2 string) string {
+                // For this test, let's imagine a func call `concat(s1, s2)`
+                return concat(s1, s2); 
+            }
+
+            func main() void {
+                var name = "World";
+                var message = combine(GREETING, name);
+                print(message);
+            }
+        "#;
+        let result = parse(input).unwrap();
+
+        assert_eq!(
+            result,
+            vec![
+                Item::ConstDecl(
+                    "GREETING".to_string(),
+                    Expression::StringConst("Hello".to_string())
+                ),
+                Item::FuncDecl {
+                    name: "combine".to_string(),
+                    params: vec![
+                        ("s1".to_string(), "string".to_string()),
+                        ("s2".to_string(), "string".to_string())
+                    ],
+                    ret_type: "string".to_string(),
+                    body: Block(vec![
+                        Statement::ReturnStatement(Expression::FuncCall {
+                            func: "concat".to_string(),
+                            args: vec![
+                                Expression::Variable("s1".to_string()),
+                                Expression::Variable("s2".to_string())
+                            ]
+                        }),
+                        Statement::SemicolonStatement
+                    ])
+                },
+                Item::FuncDecl {
+                    name: "main".to_string(),
+                    params: vec![],
+                    ret_type: "void".to_string(),
+                    body: Block(vec![
+                        Statement::VarDecl {
+                            name: "name".to_string(),
+                            init_expr: Expression::StringConst("World".to_string())
+                        },
+                        Statement::SemicolonStatement,
+                        Statement::VarDecl {
+                            name: "message".to_string(),
+                            init_expr: Expression::FuncCall {
+                                func: "combine".to_string(),
+                                args: vec![
+                                    Expression::Variable("GREETING".to_string()),
+                                    Expression::Variable("name".to_string())
+                                ]
+                            }
+                        },
+                        Statement::SemicolonStatement,
+                        Statement::ExpressionStatement(Expression::FuncCall {
+                            func: "print".to_string(),
+                            args: vec![Expression::Variable("message".to_string())]
+                        }),
+                        Statement::SemicolonStatement,
+                    ])
+                }
+            ]
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_syntax_error() {
+        parse("func main() void { var x = ; }").unwrap();
+    }
+
+    #[test]
+    fn test_for_loop_with_if_else() {
+        let input = r#"
+            func process(limit int) void {
+                for var i = 0; i < limit; i = i + 1 {
+                    if i % 2 == 0 {
+                        print("even");
+                    } else {
+                        print("odd");
+                    }
+                }
+            }
+        "#;
+        let expected = vec![Item::FuncDecl {
+            name: "process".to_string(),
+            params: vec![("limit".to_string(), "int".to_string())],
+            ret_type: "void".to_string(),
+            body: Block(vec![Statement::ForLoop {
+                var_decl: Box::new(Statement::VarDecl {
+                    name: "i".to_string(),
+                    init_expr: Expression::IntConst(0),
+                }),
+                cond_expr: Expression::BinOp {
+                    left: Box::new(Expression::Variable("i".to_string())),
+                    op: BinOp::Lt,
+                    right: Box::new(Expression::Variable("limit".to_string())), // Corrected: was IntConst
+                },
+                iter_expr: Expression::Assignment {
+                    left: Box::new(Expression::Variable("i".to_string())),
+                    right: Box::new(Expression::BinOp {
+                        left: Box::new(Expression::Variable("i".to_string())),
+                        op: BinOp::Add,
+                        right: Box::new(Expression::IntConst(1)),
+                    }),
+                },
+                body: Block(vec![Statement::IfStatement {
+                    condition: Expression::BinOp {
+                        left: Box::new(Expression::BinOp {
+                            left: Box::new(Expression::Variable("i".to_string())),
+                            op: BinOp::Mod,
+                            right: Box::new(Expression::IntConst(2)),
+                        }),
+                        op: BinOp::Eq,
+                        right: Box::new(Expression::IntConst(0)),
+                    },
+                    body: Block(vec![
+                        Statement::ExpressionStatement(Expression::FuncCall {
+                            func: "print".to_string(),
+                            args: vec![Expression::StringConst("even".to_string())],
+                        }),
+                        Statement::SemicolonStatement,
+                    ]),
+                    else_body: Some(Block(vec![
+                        Statement::ExpressionStatement(Expression::FuncCall {
+                            func: "print".to_string(),
+                            args: vec![Expression::StringConst("odd".to_string())],
+                        }),
+                        Statement::SemicolonStatement,
+                    ])),
+                }]),
+            }]),
+        }];
+        let result = parse(input).unwrap();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_expr_all_bin_ops() {
+        let ops_map = vec![
+            (Token::PlusSign, BinOp::Add),
+            (Token::MinusSign, BinOp::Sub),
+            (Token::AsteriskSign, BinOp::Mul),
+            (Token::SlashSign, BinOp::Div),
+            (Token::PercentSign, BinOp::Mod),
+            (Token::EqualEqualSign, BinOp::Eq),
+            (Token::ExclamationMarkEqualSign, BinOp::Neq),
+            (Token::LessThanSign, BinOp::Lt),
+            (Token::GreaterThanSign, BinOp::Gt),
+            (Token::LessThanEqualSign, BinOp::Leq),
+            (Token::GreaterThanEqualSign, BinOp::Geq),
+            (Token::LessThanLessThanSign, BinOp::LShift),
+            (Token::GreaterThanGreaterThanSign, BinOp::RShift),
+            (Token::AmpersandAmpersandSign, BinOp::And),
+            (Token::PipePipeSign, BinOp::Or),
+        ];
+
+        for (token_op_str, bin_op) in ops_map {
+            let op_str = match token_op_str {
+                Token::PlusSign => "+",
+                Token::MinusSign => "-",
+                Token::AsteriskSign => "*",
+                Token::SlashSign => "/",
+                Token::PercentSign => "%",
+                Token::EqualEqualSign => "==",
+                Token::ExclamationMarkEqualSign => "!=",
+                Token::LessThanSign => "<",
+                Token::GreaterThanSign => ">",
+                Token::LessThanEqualSign => "<=",
+                Token::GreaterThanEqualSign => ">=",
+                Token::LessThanLessThanSign => "<<",
+                Token::GreaterThanGreaterThanSign => ">>",
+                Token::AmpersandAmpersandSign => "&&",
+                Token::PipePipeSign => "||",
+                _ => panic!("Unhandled token for op string"),
+            };
+            let input_str = format!("a {} b", op_str);
+            let result = expr().parse(into_parser_input(&input_str)).unwrap();
+
+            assert_eq!(
+                result,
+                Expression::BinOp {
+                    left: Box::new(Expression::Variable("a".to_string())),
+                    op: bin_op,
+                    right: Box::new(Expression::Variable("b".to_string()))
+                },
+                "Failed for operator: {:?}",
+                op_str
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_item_incomplete_func_decl() {
+        item()
+            .parse(into_parser_input("func missingParts"))
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_block_mismatched_brackets() {
+        block().parse(into_parser_input("{ var x = 1; ")).unwrap();
+    }
+
+    #[test]
+    fn test_items_with_varied_spacing_and_multiple_items() {
+        let input = r#"
+            const   VALUE_A    =10
+            func  myFunc ( param1  int ,param2 string)void{var temp=param1;}
+            const VALUE_B= "text"
+        "#;
+        let expected = vec![
+            Item::ConstDecl("VALUE_A".to_string(), Expression::IntConst(10)),
+            Item::FuncDecl {
+                name: "myFunc".to_string(),
+                params: vec![
+                    ("param1".to_string(), "int".to_string()),
+                    ("param2".to_string(), "string".to_string()),
+                ],
+                ret_type: "void".to_string(),
+                body: Block(vec![
+                    Statement::VarDecl {
+                        name: "temp".to_string(),
+                        init_expr: Expression::Variable("param1".to_string()),
+                    },
+                    Statement::SemicolonStatement,
+                ]),
+            },
+            Item::ConstDecl(
+                "VALUE_B".to_string(),
+                Expression::StringConst("text".to_string()),
+            ),
+        ];
+        let result = parse(input).unwrap();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_func_decl_no_params_with_return_and_body() {
+        let input = "func getMeaning() int { return 42; }";
+        let expected = Item::FuncDecl {
+            name: "getMeaning".to_string(),
+            params: vec![],
+            ret_type: "int".to_string(),
+            body: Block(vec![
+                Statement::ReturnStatement(Expression::IntConst(42)),
+                Statement::SemicolonStatement,
+            ]),
+        };
+        let result = item().parse(into_parser_input(input)).unwrap();
+
+        assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn test_func_decl_with_params_empty_body() {
+        let input = "func setup(config string) void {}";
+        let expected = Item::FuncDecl {
+            name: "setup".to_string(),
+            params: vec![("config".to_string(), "string".to_string())],
+            ret_type: "void".to_string(),
+            body: Block(vec![]),
+        };
+        let result = item().parse(into_parser_input(input)).unwrap();
+
+        assert_eq!(result, expected);
     }
 }

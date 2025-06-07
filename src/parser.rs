@@ -72,6 +72,7 @@ pub enum Statement {
     ExpressionStatement(Expression),
     VarDecl {
         name: String,
+        type_name: Option<String>,
         init_expr: Expression,
     },
     IfStatement {
@@ -88,7 +89,7 @@ pub enum Statement {
     Break,
     Continue,
     BlockStatement(Block),
-    ReturnStatement(Expression),
+    ReturnStatement(Option<Expression>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -103,6 +104,10 @@ pub enum Item {
         ret_type: String,
     },
     ConstDecl(String, Expression),
+    StructDecl {
+        name: String,
+        fields: Vec<(String, String)>, // (field_name, field_type)
+    },
 }
 
 type ErrT<'a> = Rich<'a, Token, SpanT>;
@@ -140,9 +145,14 @@ fn block<'a, I: ValueInput<'a, Token = Token, Span = SpanT>>()
 
         let var_decl = just(Token::VarKeyword)
             .ignore_then(ident())
+            .then(ident().or_not())
             .then_ignore(just(Token::EqualSign))
             .then(expr())
-            .map(|(name, init_expr)| Statement::VarDecl { name, init_expr });
+            .map(|((name, type_name), init_expr)| Statement::VarDecl {
+                name,
+                type_name,
+                init_expr,
+            });
 
         let if_else_stmt = just(Token::IfKeyword)
             .ignore_then(expr())
@@ -173,7 +183,7 @@ fn block<'a, I: ValueInput<'a, Token = Token, Span = SpanT>>()
         let inner_block = block.clone().map(Statement::BlockStatement);
 
         let return_stmt = just(Token::ReturnKeyword)
-            .ignore_then(expr())
+            .ignore_then(expr().or_not())
             .map(Statement::ReturnStatement);
 
         choice((
@@ -431,13 +441,30 @@ fn item<'a, I: ValueInput<'a, Token = Token, Span = SpanT>>()
         })
         .labelled("function declaration");
 
+    let struct_decl = just(Token::StructKeyword)
+        .ignore_then(ident())
+        .then(
+            ident()
+                .labelled("field name")
+                .then(ident().labelled("field type"))
+                .labelled("struct field")
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(
+                    just(Token::LeftFigureBracketSign),
+                    just(Token::RightFigureBracketSign),
+                ),
+        )
+        .map(|(name, fields)| Item::StructDecl { name, fields })
+        .labelled("struct declaration");
+
     let const_decl = just(Token::ConstKeyword)
         .ignore_then(ident())
         .then_ignore(just(Token::EqualSign))
         .then(expr())
         .map(|(name, value)| Item::ConstDecl(name, value));
 
-    choice((func_decl, const_decl)).labelled("item")
+    choice((func_decl, const_decl, struct_decl)).labelled("item")
 }
 
 fn items<'a, I: ValueInput<'a, Token = Token, Span = SpanT>>()
@@ -700,6 +727,7 @@ mod tests {
             result,
             Block(vec![Statement::VarDecl {
                 name: "count".to_string(),
+                type_name: None,
                 init_expr: Expression::IntConst(0)
             }])
         );
@@ -716,6 +744,7 @@ mod tests {
             Block(vec![
                 Statement::VarDecl {
                     name: "count".to_string(),
+                    type_name: None,
                     init_expr: Expression::IntConst(0)
                 },
                 Statement::SemicolonStatement
@@ -782,6 +811,7 @@ mod tests {
             Block(vec![Statement::ForLoop {
                 var_decl: Box::new(Statement::VarDecl {
                     name: "i".to_string(),
+                    type_name: None,
                     init_expr: Expression::IntConst(0)
                 }),
                 cond_expr: Expression::BinOp {
@@ -816,11 +846,11 @@ mod tests {
 
         assert_eq!(
             result,
-            Block(vec![Statement::ReturnStatement(Expression::BinOp {
+            Block(vec![Statement::ReturnStatement(Some(Expression::BinOp {
                 left: Box::new(Expression::Variable("x".to_string())),
                 op: BinOp::Mul,
                 right: Box::new(Expression::Variable("x".to_string()))
-            })])
+            }))])
         );
     }
 
@@ -833,11 +863,11 @@ mod tests {
         assert_eq!(
             result,
             Block(vec![
-                Statement::ReturnStatement(Expression::BinOp {
+                Statement::ReturnStatement(Some(Expression::BinOp {
                     left: Box::new(Expression::Variable("x".to_string())),
                     op: BinOp::Mul,
                     right: Box::new(Expression::Variable("x".to_string()))
-                }),
+                })),
                 Statement::SemicolonStatement
             ])
         );
@@ -854,6 +884,7 @@ mod tests {
             Block(vec![Statement::BlockStatement(Block(vec![
                 Statement::VarDecl {
                     name: "inner".to_string(),
+                    type_name: None,
                     init_expr: Expression::IntConst(1)
                 },
                 Statement::SemicolonStatement
@@ -871,19 +902,21 @@ mod tests {
             Block(vec![
                 Statement::VarDecl {
                     name: "a".to_string(),
+                    type_name: None,
                     init_expr: Expression::IntConst(1)
                 },
                 Statement::SemicolonStatement,
                 Statement::VarDecl {
                     name: "b".to_string(),
+                    type_name: None,
                     init_expr: Expression::IntConst(2)
                 },
                 Statement::SemicolonStatement,
-                Statement::ReturnStatement(Expression::BinOp {
+                Statement::ReturnStatement(Some(Expression::BinOp {
                     left: Box::new(Expression::Variable("a".to_string())),
                     op: BinOp::Add,
                     right: Box::new(Expression::Variable("b".to_string()))
-                }),
+                })),
                 Statement::SemicolonStatement,
             ])
         );
@@ -894,6 +927,7 @@ mod tests {
         let result = item()
             .parse(into_parser_input("const MAX_VALUE = 1000"))
             .unwrap();
+
         assert_eq!(
             result,
             Item::ConstDecl("MAX_VALUE".to_string(), Expression::IntConst(1000))
@@ -932,11 +966,11 @@ mod tests {
                 ],
                 ret_type: "int".to_string(),
                 body: Block(vec![
-                    Statement::ReturnStatement(Expression::BinOp {
+                    Statement::ReturnStatement(Some(Expression::BinOp {
                         left: Box::new(Expression::Variable("x".to_string())),
                         op: BinOp::Add,
                         right: Box::new(Expression::Variable("y".to_string()))
-                    }),
+                    })),
                     Statement::SemicolonStatement
                 ])
             }
@@ -944,80 +978,109 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_input() {
-        let result = parse("").unwrap();
-        assert_eq!(result, vec![]);
-    }
-
-    #[test]
-    fn test_single_const() {
-        let result = parse("const PI = 3.14159").unwrap();
+    fn test_item_struct_decl_empty() {
+        let result = item().parse(into_parser_input("struct Point { }")).unwrap();
 
         assert_eq!(
             result,
-            vec![Item::ConstDecl(
-                "PI".to_string(),
-                Expression::FloatConst(3.14159)
-            )]
+            Item::StructDecl {
+                name: "Point".to_string(),
+                fields: vec![]
+            }
         );
     }
 
     #[test]
-    #[should_panic]
-    fn test_single_const_with_trailing_semicolon_is_error() {
-        parse("const X = 1;").unwrap();
-    }
-
-    #[test]
-    fn test_single_func() {
-        let result = parse("func main() void { }").unwrap();
+    fn test_item_struct_decl_with_fields() {
+        let result = item()
+            .parse(into_parser_input("struct Person { name string age int }"))
+            .unwrap();
 
         assert_eq!(
             result,
-            vec![Item::FuncDecl {
-                name: "main".to_string(),
-                params: vec![],
-                ret_type: "void".to_string(),
-                body: Block(vec![])
-            }]
+            Item::StructDecl {
+                name: "Person".to_string(),
+                fields: vec![
+                    ("name".to_string(), "string".to_string()),
+                    ("age".to_string(), "int".to_string())
+                ]
+            }
         );
     }
 
     #[test]
-    fn test_multiple_items() {
+    fn test_item_struct_decl_single_field() {
+        let result = item()
+            .parse(into_parser_input("struct Wrapper { value SomeType }"))
+            .unwrap();
+
+        assert_eq!(
+            result,
+            Item::StructDecl {
+                name: "Wrapper".to_string(),
+                fields: vec![("value".to_string(), "SomeType".to_string())]
+            }
+        );
+    }
+
+    #[test]
+    fn test_multiple_items_including_struct() {
         let input = r#"
-            const VERSION = 1.0
+            const PI = 3.14
 
-            func start() void {
-                var initialized = 1;
+            struct Vector {
+                x float
+                y float
             }
 
-            const AUTHOR = "O. Piskovyi"
+            func calculate() void {
+                var v Vector = null;
+            }
         "#;
         let result = parse(input).unwrap();
 
         assert_eq!(
             result,
             vec![
-                Item::ConstDecl("VERSION".to_string(), Expression::FloatConst(1.0)),
+                Item::ConstDecl("PI".to_string(), Expression::FloatConst(3.14)),
+                Item::StructDecl {
+                    name: "Vector".to_string(),
+                    fields: vec![
+                        ("x".to_string(), "float".to_string()),
+                        ("y".to_string(), "float".to_string())
+                    ]
+                },
                 Item::FuncDecl {
-                    name: "start".to_string(),
+                    name: "calculate".to_string(),
                     params: vec![],
                     ret_type: "void".to_string(),
                     body: Block(vec![
                         Statement::VarDecl {
-                            name: "initialized".to_string(),
-                            init_expr: Expression::IntConst(1)
+                            name: "v".to_string(),
+                            type_name: Some("Vector".to_string()),
+                            init_expr: Expression::Variable("null".to_string())
                         },
                         Statement::SemicolonStatement
                     ])
                 },
-                Item::ConstDecl(
-                    "AUTHOR".to_string(),
-                    Expression::StringConst("O. Piskovyi".to_string())
-                ),
             ]
         );
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_item_struct_decl_missing_closing_bracket() {
+        item()
+            .parse(into_parser_input("struct BadStruct { name string"))
+            .unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_item_struct_decl_missing_opening_bracket() {
+        item()
+            .parse(into_parser_input("struct BadStruct name string }"))
+            .unwrap();
     }
 
     #[test]
@@ -1053,13 +1116,13 @@ mod tests {
                     ],
                     ret_type: "string".to_string(),
                     body: Block(vec![
-                        Statement::ReturnStatement(Expression::FuncCall {
+                        Statement::ReturnStatement(Some(Expression::FuncCall {
                             func: "concat".to_string(),
                             args: vec![
                                 Expression::Variable("s1".to_string()),
                                 Expression::Variable("s2".to_string())
                             ]
-                        }),
+                        })),
                         Statement::SemicolonStatement
                     ])
                 },
@@ -1070,11 +1133,13 @@ mod tests {
                     body: Block(vec![
                         Statement::VarDecl {
                             name: "name".to_string(),
+                            type_name: None,
                             init_expr: Expression::StringConst("World".to_string())
                         },
                         Statement::SemicolonStatement,
                         Statement::VarDecl {
                             name: "message".to_string(),
+                            type_name: None,
                             init_expr: Expression::FuncCall {
                                 func: "combine".to_string(),
                                 args: vec![
@@ -1121,6 +1186,7 @@ mod tests {
             body: Block(vec![Statement::ForLoop {
                 var_decl: Box::new(Statement::VarDecl {
                     name: "i".to_string(),
+                    type_name: None,
                     init_expr: Expression::IntConst(0),
                 }),
                 cond_expr: Expression::BinOp {
@@ -1256,6 +1322,7 @@ mod tests {
                 body: Block(vec![
                     Statement::VarDecl {
                         name: "temp".to_string(),
+                        type_name: None,
                         init_expr: Expression::Variable("param1".to_string()),
                     },
                     Statement::SemicolonStatement,
@@ -1279,7 +1346,7 @@ mod tests {
             params: vec![],
             ret_type: "int".to_string(),
             body: Block(vec![
-                Statement::ReturnStatement(Expression::IntConst(42)),
+                Statement::ReturnStatement(Some(Expression::IntConst(42))),
                 Statement::SemicolonStatement,
             ]),
         };

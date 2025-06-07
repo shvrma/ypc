@@ -10,15 +10,19 @@ See *examples* directory for examples of the code.
 
 program ::= { item } EOF
 
-item ::= func_decl | const_decl
+item ::= func_decl | const_decl | struct_decl
 
 const_decl ::= "const" Identifier "=" expression
 
-func_decl ::= "func" Identifier func_params Identifier block
+func_decl ::= "func" Identifier "(" func_params ")" Identifier block
 
-func_params ::= "(" [ single_func_param { "," single_func_param } ] ")"
+func_params ::= [ single_func_param { "," single_func_param } ]
 
-single_func_param ::= Identifier Identifier  // param_name param_type
+single_func_param ::= Identifier Identifier  // name type
+
+struct_decl ::= "struct" Identifier "{" [ { struct_field } ] "}"
+
+struct_field ::= Identifier Identifier // name, type
 
 block ::= "{" { statement } "}"
 
@@ -36,7 +40,7 @@ semicolon_stmt ::= ";"
 
 expression_statement ::= expression
 
-var_decl ::= "var" Identifier "=" expression
+var_decl ::= "var" Identifier [ Identifier ] "=" expression // name, type
 
 if_else_stmt ::= "if" expression block [ "else" block ]
 

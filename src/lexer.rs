@@ -1,5 +1,9 @@
-use std::num::{ParseFloatError, ParseIntError};
+use std::{
+    fmt::Display,
+    num::{ParseFloatError, ParseIntError},
+};
 
+use ariadne::{Color, Fmt};
 use logos::{Lexer, Logos};
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -99,55 +103,106 @@ pub enum Token {
     VarKeyword,
 
     #[token("+")]
-    PlusSign, // +
+    PlusSign,
     #[token("&&")]
-    AmpersandAmpersandSign, // &&
+    AmpersandAmpersandSign,
     #[token("==")]
-    EqualEqualSign, // ==
+    EqualEqualSign,
     #[token("!=")]
-    ExclamationMarkEqualSign, // !=
+    ExclamationMarkEqualSign,
     #[token("(")]
-    LeftParenthesisSign, // (
+    LeftParenthesisSign,
     #[token(")")]
-    RightParenthesisSign, // )
+    RightParenthesisSign,
     #[token("-")]
-    MinusSign, // -
+    MinusSign,
     #[token("||")]
-    PipePipeSign, // ||
+    PipePipeSign,
     #[token("<")]
-    LessThanSign, // <
+    LessThanSign,
     #[token("<=")]
-    LessThanEqualSign, // <=
+    LessThanEqualSign,
     #[token("*")]
-    AsteriskSign, // *
+    AsteriskSign,
     #[token(">")]
-    GreaterThanSign, // >
+    GreaterThanSign,
     #[token(">=")]
-    GreaterThanEqualSign, // >=
+    GreaterThanEqualSign,
     #[token("{")]
-    LeftFigureBracketSign, // {
+    LeftFigureBracketSign,
     #[token("}")]
-    RightFigureBracketSign, // }
+    RightFigureBracketSign,
     #[token("/")]
-    SlashSign, // /
+    SlashSign,
     #[token("<<")]
-    LessThanLessThanSign, // <<
+    LessThanLessThanSign,
     #[token("=")]
-    EqualSign, // =
+    EqualSign,
     #[token(",")]
-    CommaSign, // ,
+    CommaSign,
     #[token(";")]
-    SemicolonSign, // ;
+    SemicolonSign,
     #[token("%")]
-    PercentSign, // %
+    PercentSign,
     #[token(">>")]
-    GreaterThanGreaterThanSign, // >>
+    GreaterThanGreaterThanSign,
     #[token("!")]
-    ExclamationMarkSign, // !
+    ExclamationMarkSign,
     #[token(".")]
-    DotSign, // .
+    DotSign,
     #[token("&")]
-    AmpersandSign, // &
+    AmpersandSign,
+}
+
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const HL_COLOR: Color = Color::BrightRed;
+
+        match self {
+            Token::Identifier(s) => write!(f, "Identifier({})", s),
+            Token::IntConstant(n) => write!(f, "Integer Constant({})", n),
+            Token::FloatConstant(n) => write!(f, "Float Constant({})", n),
+            Token::StringLiteral(s) => write!(f, "String Literal({})", s),
+            Token::MalformedToken(e) => write!(f, "Malformed Token({:?})", e),
+
+            Token::BreakKeyword => write!(f, "{}", "break".fg(HL_COLOR)),
+            Token::FuncKeyword => write!(f, "{}", "func".fg(HL_COLOR)),
+            Token::StructKeyword => write!(f, "{}", "struct".fg(HL_COLOR)),
+            Token::ElseKeyword => write!(f, "{}", "else".fg(HL_COLOR)),
+            Token::ConstKeyword => write!(f, "{}", "const".fg(HL_COLOR)),
+            Token::IfKeyword => write!(f, "{}", "if".fg(HL_COLOR)),
+            Token::ContinueKeyword => write!(f, "{}", "continue".fg(HL_COLOR)),
+            Token::ForKeyword => write!(f, "{}", "for".fg(HL_COLOR)),
+            Token::ReturnKeyword => write!(f, "{}", "return".fg(HL_COLOR)),
+            Token::VarKeyword => write!(f, "{}", "var".fg(HL_COLOR)),
+
+            Token::PlusSign => write!(f, "{}", "+".fg(HL_COLOR)),
+            Token::AmpersandAmpersandSign => write!(f, "{}", "&&".fg(HL_COLOR)),
+            Token::EqualEqualSign => write!(f, "{}", "==".fg(HL_COLOR)),
+            Token::ExclamationMarkEqualSign => write!(f, "{}", "!=".fg(HL_COLOR)),
+            Token::LeftParenthesisSign => write!(f, "{}", "(".fg(HL_COLOR)),
+            Token::RightParenthesisSign => write!(f, "{}", ")".fg(HL_COLOR)),
+            Token::MinusSign => write!(f, "{}", "-".fg(HL_COLOR)),
+            Token::PipePipeSign => write!(f, "{}", "||".fg(HL_COLOR)),
+            Token::LessThanSign => write!(f, "{}", "<".fg(HL_COLOR)),
+            Token::LessThanEqualSign => write!(f, "{}", "<=".fg(HL_COLOR)),
+            Token::AsteriskSign => write!(f, "{}", "*".fg(HL_COLOR)),
+            Token::GreaterThanSign => write!(f, "{}", ">".fg(HL_COLOR)),
+            Token::GreaterThanEqualSign => write!(f, "{}", ">=".fg(HL_COLOR)),
+            Token::LeftFigureBracketSign => write!(f, "{}", "{".fg(HL_COLOR)),
+            Token::RightFigureBracketSign => write!(f, "{}", "}".fg(HL_COLOR)),
+            Token::SlashSign => write!(f, "{}", "/".fg(HL_COLOR)),
+            Token::LessThanLessThanSign => write!(f, "{}", "<<".fg(HL_COLOR)),
+            Token::EqualSign => write!(f, "{}", "=".fg(HL_COLOR)),
+            Token::CommaSign => write!(f, "{}", ",".fg(HL_COLOR)),
+            Token::SemicolonSign => write!(f, "{}", ";".fg(HL_COLOR)),
+            Token::PercentSign => write!(f, "{}", "%".fg(HL_COLOR)),
+            Token::GreaterThanGreaterThanSign => write!(f, "{}", ">>".fg(HL_COLOR)),
+            Token::ExclamationMarkSign => write!(f, "{}", "!".fg(HL_COLOR)),
+            Token::DotSign => write!(f, "{}", ".".fg(HL_COLOR)),
+            Token::AmpersandSign => write!(f, "{}", "&".fg(HL_COLOR)),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,10 @@
+struct InvalidT {
+    x int
+    x int
+    y int
+    z int
+}
+
+struct Person {
+    id NonExistentT
+}

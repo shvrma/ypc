@@ -17,11 +17,18 @@ pub type SpanT = Range<usize>;
 pub type Spanned<T> = (T, SpanT);
 
 #[derive(Debug, PartialEq)]
+pub enum TypeName<'a> {
+    Named(&'a str),
+    Ptr(Box<Spanned<TypeName<'a>>>),
+}
+
+#[derive(Debug, PartialEq)]
 pub enum Expression<'a> {
     IntConst(u64),
     FloatConst(f64),
     StringConst(String),
     Variable(&'a str),
+
     BinOp {
         lhs: Box<Spanned<Expression<'a>>>,
         op: BinOp,
@@ -72,10 +79,10 @@ pub enum BinOp {
 #[derive(Debug, PartialEq)]
 pub enum Statement<'a> {
     SemicolonStatement,
-    ExpressionStatement(Expression<'a>),
+    ExpressionStatement(Spanned<Expression<'a>>),
     VarDecl {
         name: Spanned<&'a str>,
-        type_name: Option<Spanned<&'a str>>,
+        type_name: Option<Spanned<TypeName<'a>>>,
         init_expr: Spanned<Expression<'a>>,
     },
     IfStatement {
@@ -103,17 +110,17 @@ pub enum Item<'a> {
     FuncDecl {
         name: Spanned<&'a str>,
         body: Spanned<Block<'a>>,
-        params: Vec<Spanned<(Spanned<&'a str>, Spanned<&'a str>)>>, // (param_name, param_type)
-        ret_type: Spanned<&'a str>,
+        params: Vec<Spanned<(Spanned<&'a str>, Spanned<TypeName<'a>>)>>, // (param_name, param_type)
+        ret_type: Option<Spanned<TypeName<'a>>>,
     },
     ConstDecl {
         name: Spanned<&'a str>,
-        type_name: Option<Spanned<&'a str>>,
+        type_name: Option<Spanned<TypeName<'a>>>,
         init_expr: Spanned<Expression<'a>>,
     },
     StructDecl {
         name: Spanned<&'a str>,
-        fields: Vec<Spanned<(Spanned<&'a str>, Spanned<&'a str>)>>, // (field_name, field_type)
+        fields: Vec<Spanned<(Spanned<&'a str>, Spanned<TypeName<'a>>)>>, // (field_name, field_type)
     },
 }
 
@@ -142,6 +149,19 @@ fn ident<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
     }
 }
 
+fn type_name<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
+-> impl Parser<'a, I, Spanned<TypeName<'a>>, ExtraT<'a>> + Clone {
+    recursive(|type_name| {
+        let named_type = ident().map(|(n, s)| (TypeName::Named(n), s));
+
+        let ptr_type = just(Token::AsteriskSign)
+            .ignore_then(type_name.clone())
+            .map_with(|inner_type, e| (TypeName::Ptr(Box::new(inner_type)), e.span()));
+
+        choice((named_type, ptr_type)).labelled("type name")
+    })
+}
+
 fn block<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
 -> impl Parser<'a, I, Spanned<Block<'a>>, ExtraT<'a>> + Clone {
     recursive(|block| {
@@ -149,13 +169,12 @@ fn block<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
             just(Token::SemicolonSign).map_with(|_, e| (Statement::SemicolonStatement, e.span()));
 
         let expr_stmt = expr()
-            .map_with(|expr, e| (Statement::ExpressionStatement(expr.0), e.span()))
-            .then_ignore(just(Token::SemicolonSign))
+            .map_with(|expr, e| (Statement::ExpressionStatement(expr), e.span()))
             .labelled("expression statement");
 
         let var_decl = just(Token::VarKeyword)
             .ignore_then(ident())
-            .then(ident().or_not())
+            .then(type_name().or_not())
             .then_ignore(just(Token::EqualSign))
             .then(expr())
             .map_with(|((name, type_name), init_expr), e| {
@@ -507,7 +526,7 @@ fn item<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
     let single_func_param = ident()
         .labelled("param name")
         .clone()
-        .then(ident().labelled("param type"))
+        .then(type_name().labelled("param type"))
         .map_with(|(name, ty), e| ((name, ty), e.span()));
 
     let func_params = single_func_param
@@ -527,7 +546,7 @@ fn item<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
     let func_decl = just(Token::FuncKeyword)
         .ignore_then(ident())
         .then(func_params)
-        .then(ident().labelled("return type"))
+        .then(type_name().labelled("return type").or_not())
         .then(block())
         .map_with(|(((name, params), ret_type), body), e| {
             (
@@ -547,7 +566,7 @@ fn item<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
         .then(
             ident()
                 .labelled("field name")
-                .then(ident().labelled("field type"))
+                .then(type_name().labelled("field type"))
                 .map_with(|(name, ty), e| ((name, ty), e.span()))
                 .labelled("struct field")
                 .repeated()
@@ -568,7 +587,7 @@ fn item<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
 
     let const_decl = just(Token::ConstKeyword)
         .ignore_then(ident())
-        .then(ident().or_not())
+        .then(type_name().or_not())
         .then_ignore(just(Token::EqualSign))
         .then(expr())
         .map_with(|((name, type_name), init_expr), e| {

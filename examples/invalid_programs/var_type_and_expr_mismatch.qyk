@@ -1,0 +1,13 @@
+func first_case() void {
+    var x int = "Some string"
+}
+
+func second_case() int {
+    return 1.0
+}
+
+func third_case() void {
+    var x float = 1
+
+    return x
+}

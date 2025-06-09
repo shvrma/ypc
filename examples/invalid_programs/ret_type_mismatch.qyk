@@ -1,0 +1,7 @@
+func main() int {
+    return get_msg()
+}
+
+func get_msg() *char {
+    return "Hello, world!"
+}

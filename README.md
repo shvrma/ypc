@@ -10,19 +10,21 @@ See *examples* directory for examples of the code.
 
 program ::= { item } EOF
 
+type_name = Identifier | "*" type_name
+
 item ::= func_decl | const_decl | struct_decl
 
-const_decl ::= "const" Identifier "=" expression
+const_decl ::= "const" Identifier [ type_name ] "=" expression
 
-func_decl ::= "func" Identifier "(" func_params ")" Identifier block
+func_decl ::= "func" Identifier "(" func_params ")" [ type_name ] block
 
 func_params ::= [ single_func_param { "," single_func_param } ]
 
-single_func_param ::= Identifier Identifier  // name type
+single_func_param ::= Identifier type_name
 
 struct_decl ::= "struct" Identifier "{" [ { struct_field } ] "}"
 
-struct_field ::= Identifier Identifier // name, type
+struct_field ::= Identifier type_name
 
 block ::= "{" { statement } "}"
 
@@ -40,7 +42,7 @@ semicolon_stmt ::= ";"
 
 expression_statement ::= expression
 
-var_decl ::= "var" Identifier [ Identifier ] "=" expression // name, type
+var_decl ::= "var" Identifier [ type_name ] "=" expression
 
 if_else_stmt ::= "if" expression block [ "else" block ]
 
@@ -78,3 +80,8 @@ primary_expr ::= IntConstant
 func_call ::= identifier "(" [ expression { "," expression } ] ")"
 
 ```
+
+## Further work
+
+1. Refactor *sem.rs*
+2. Resolve all TODO's in the code

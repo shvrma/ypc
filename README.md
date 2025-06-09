@@ -2,6 +2,8 @@
 
 Currently, a standalone compiler frontend.
 
+See the *examples* folder for examples of both valid and invalid programs in this project's language.
+
 ## Currently recognizable grammar
 
 ```ebnf

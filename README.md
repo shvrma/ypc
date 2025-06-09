@@ -1,8 +1,6 @@
-# qiyoku
+# ypc
 
-A simple (in terms of both syntax and implementation) programming language targeting compiling to RISC-V assemmbly.
-
-See *examples* directory for examples of the code.
+Currently, a standalone compiler frontend.
 
 ## Currently recognizable grammar
 

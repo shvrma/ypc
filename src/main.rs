@@ -8,15 +8,11 @@ use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 
 #[derive(argh::FromArgs)]
 #[allow(dead_code)]
-/// A compiler of qiyoku project.
+/// A compiler of ypc project.
 pub struct Args {
-    /// the path to the input file containing the qiyoku code
+    /// the path to the input file containing the code
     #[argh(positional, default = "String::from(\"in.qyk\")")]
     input: String,
-
-    /// where the output should be written to. Defaults to "out.s"
-    #[argh(option, default = "String::from(\"out.s\")")]
-    output: String,
 }
 
 fn main() {

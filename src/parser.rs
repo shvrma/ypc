@@ -96,14 +96,14 @@ pub enum Statement<'a> {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Block<'a>(Vec<Spanned<Statement<'a>>>);
+pub struct Block<'a>(pub Vec<Spanned<Statement<'a>>>);
 
 #[derive(Debug, PartialEq)]
 pub enum Item<'a> {
     FuncDecl {
         name: Spanned<&'a str>,
         body: Spanned<Block<'a>>,
-        params: Vec<(Spanned<&'a str>, Spanned<&'a str>)>, // (param_name, param_type)
+        params: Vec<Spanned<(Spanned<&'a str>, Spanned<&'a str>)>>, // (param_name, param_type)
         ret_type: Spanned<&'a str>,
     },
     ConstDecl {
@@ -113,7 +113,7 @@ pub enum Item<'a> {
     },
     StructDecl {
         name: Spanned<&'a str>,
-        fields: Vec<(Spanned<&'a str>, Spanned<&'a str>)>, // (field_name, field_type)
+        fields: Vec<Spanned<(Spanned<&'a str>, Spanned<&'a str>)>>, // (field_name, field_type)
     },
 }
 
@@ -507,7 +507,8 @@ fn item<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
     let single_func_param = ident()
         .labelled("param name")
         .clone()
-        .then(ident().labelled("param type"));
+        .then(ident().labelled("param type"))
+        .map_with(|(name, ty), e| ((name, ty), e.span()));
 
     let func_params = single_func_param
         .separated_by(just(Token::CommaSign))
@@ -547,9 +548,16 @@ fn item<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
             ident()
                 .labelled("field name")
                 .then(ident().labelled("field type"))
+                .map_with(|(name, ty), e| ((name, ty), e.span()))
                 .labelled("struct field")
                 .repeated()
                 .collect::<Vec<_>>()
+                .map(|fields| {
+                    fields
+                        .into_iter()
+                        .map(|(name, ty)| (name, ty))
+                        .collect::<Vec<_>>()
+                })
                 .delimited_by(
                     just(Token::LeftFigureBracketSign),
                     just(Token::RightFigureBracketSign),

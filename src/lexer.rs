@@ -29,7 +29,7 @@ impl From<ParseFloatError> for LexingError {
     }
 }
 
-fn handle_escape_sequences(lex: &mut Lexer<Token>) -> Result<String, LexingError> {
+fn handle_escape_sequences<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Result<String, LexingError> {
     let s = lex.slice();
     let s = s[1..s.len() - 1].to_string();
     let mut unescaped = String::with_capacity(s.len());
@@ -66,11 +66,11 @@ fn handle_escape_sequences(lex: &mut Lexer<Token>) -> Result<String, LexingError
 #[logos(skip r"[[:space:]]*")]
 #[logos(skip r"//[^\n]*\n")]
 #[logos(error = LexingError)]
-pub enum Token {
+pub enum Token<'a> {
     MalformedToken(LexingError),
 
-    #[regex(r"([[:alpha:]]|_)([[:alnum:]]|_)*", |lex| lex.slice().to_string())]
-    Identifier(String),
+    #[regex(r"([[:alpha:]]|_)([[:alnum:]]|_)*", |lex| lex.slice())]
+    Identifier(&'a str),
 
     #[regex(r"[[:digit:]]+", |lex| lex.slice().parse::<u64>())]
     IntConstant(u64),
@@ -154,7 +154,7 @@ pub enum Token {
     AmpersandSign,
 }
 
-impl Display for Token {
+impl<'a> Display for Token<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         const HL_COLOR: Color = Color::BrightRed;
 
@@ -247,10 +247,10 @@ mod tests {
         assert_eq!(
             result,
             vec![
-                Token::Identifier("variable".to_string()),
-                Token::Identifier("_underscore".to_string()),
-                Token::Identifier("myVar123".to_string()),
-                Token::Identifier("_123".to_string()),
+                Token::Identifier("variable"),
+                Token::Identifier("_underscore"),
+                Token::Identifier("myVar123"),
+                Token::Identifier("_123"),
             ]
         );
     }
@@ -345,9 +345,9 @@ mod tests {
             result,
             vec![
                 Token::VarKeyword,
-                Token::Identifier("x".to_string()),
+                Token::Identifier("x"),
                 Token::VarKeyword,
-                Token::Identifier("y".to_string()),
+                Token::Identifier("y"),
             ]
         );
     }
@@ -361,7 +361,7 @@ mod tests {
             result,
             vec![
                 Token::VarKeyword,
-                Token::Identifier("x".to_string()),
+                Token::Identifier("x"),
                 Token::EqualSign,
                 Token::IntConstant(123),
             ]
@@ -378,17 +378,17 @@ mod tests {
             vec![
                 Token::IfKeyword,
                 Token::LeftParenthesisSign,
-                Token::Identifier("x".to_string()),
+                Token::Identifier("x"),
                 Token::GreaterThanEqualSign,
                 Token::IntConstant(10),
                 Token::AmpersandAmpersandSign,
-                Token::Identifier("y".to_string()),
+                Token::Identifier("y"),
                 Token::ExclamationMarkEqualSign,
                 Token::StringLiteral("hello".to_string()),
                 Token::RightParenthesisSign,
                 Token::LeftFigureBracketSign,
                 Token::ReturnKeyword,
-                Token::Identifier("true".to_string()),
+                Token::Identifier("true"),
                 Token::SemicolonSign,
                 Token::RightFigureBracketSign,
             ]

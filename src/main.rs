@@ -35,6 +35,7 @@ fn process(args: Args) -> Result<()> {
     let input_program = std::fs::read_to_string(&args.input)?;
 
     let err_print_cache = (&args.input, Source::from(&input_program));
+    let mut colors = ColorGenerator::new();
 
     let parse_result = parser::parse(&input_program);
 
@@ -43,8 +44,6 @@ fn process(args: Args) -> Result<()> {
             use chumsky::error::RichReason;
 
             let on_span = (&args.input, e.span().to_owned());
-
-            let mut colors = ColorGenerator::new();
 
             let builder = Report::build(ReportKind::Error, on_span.clone());
 
@@ -82,7 +81,26 @@ fn process(args: Args) -> Result<()> {
         bail!("Parser returned no output");
     };
 
-    let _sem_check_result = sem::consult_ast(parse_result)?;
+    let sem_check_result = sem::SemanticAnalyzer::analyze(parse_result);
+
+    if !sem_check_result.is_empty() {
+        for e in sem_check_result {
+            let mut rep = Report::build(ReportKind::Error, (&args.input, e.span.clone()))
+                .with_message(e.message);
+
+            for (l_msg, l_span) in e.labels {
+                rep = rep.with_label(
+                    Label::new((&args.input, l_span))
+                        .with_message(l_msg)
+                        .with_color(colors.next()),
+                )
+            }
+
+            rep.finish().eprint(err_print_cache.clone())?;
+        }
+
+        return Ok(());
+    }
 
     Ok(())
 }

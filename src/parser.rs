@@ -47,6 +47,10 @@ pub enum Expression<'a> {
         lhs: Box<Spanned<Expression<'a>>>,
         rhs: Box<Spanned<Expression<'a>>>,
     },
+    StructFieldAccess {
+        struct_expr: Box<Spanned<Expression<'a>>>,
+        field_name: Spanned<&'a str>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -287,14 +291,28 @@ fn expr<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
 
         let atom = choice((func_call_atom, consts_or_var_atom, parantherised_atom));
 
-        use chumsky::pratt::{infix, left, prefix, right};
+        use chumsky::pratt::{infix, left, postfix, prefix, right};
         atom.pratt((
+            // .
+            postfix(
+                7,
+                just(Token::DotSign).ignore_then(ident()),
+                |lhs, field_name, e| {
+                    (
+                        Expression::StructFieldAccess {
+                            struct_expr: Box::new(lhs),
+                            field_name,
+                        },
+                        e.span(),
+                    )
+                },
+            ),
             // =
-            infix(right(0), just(Token::EqualSign), |l, _, r, e| {
+            infix(right(0), just(Token::EqualSign), |lhs, _, rhs, e| {
                 (
                     Expression::Assignment {
-                        lhs: Box::new(l),
-                        rhs: Box::new(r),
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
                     },
                     e.span(),
                 )
@@ -535,13 +553,7 @@ fn item<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
         .delimited_by(
             just(Token::LeftParenthesisSign),
             just(Token::RightParenthesisSign),
-        )
-        .map(|params| {
-            params
-                .into_iter()
-                .map(|(name, ty)| (name, ty))
-                .collect::<Vec<_>>()
-        });
+        );
 
     let func_decl = just(Token::FuncKeyword)
         .ignore_then(ident())

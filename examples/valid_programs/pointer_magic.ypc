@@ -1,0 +1,11 @@
+func main() {
+    var S = 5
+
+    var arr = make_arr(TYPE_int, S)
+    for var i = 0; i < S; i = i + 1 {
+        // Language do not support expression deref
+        // 4 - size of int
+        var idx = arr * (4 * i)
+        *idx = 0
+    }
+}

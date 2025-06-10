@@ -11,7 +11,7 @@ use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
 /// A compiler of ypc project.
 pub struct Args {
     /// the path to the input file containing the code
-    #[argh(positional, default = "String::from(\"in.qyk\")")]
+    #[argh(positional, default = "String::from(\"in.ypc\")")]
     input: String,
 }
 

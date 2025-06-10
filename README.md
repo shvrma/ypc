@@ -76,6 +76,7 @@ primary_expr ::= IntConstant
                | Identifier
                | func_call
                | "(" expression ")"
+               | expression "." Identifier
 
 func_call ::= Identifier "(" [ expression { "," expression } ] ")"
 

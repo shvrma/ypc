@@ -1,0 +1,14 @@
+struct User {
+    id *char
+    name *char
+    age int
+}
+
+func main() void {
+    // Allocate the user, dereference to value and copy it locally
+    var me = *make(TYPE_User)
+
+    me.id = "uniq"
+    me.name = "Imaginary Name"
+    me.age = 19
+}

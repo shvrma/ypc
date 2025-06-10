@@ -92,54 +92,74 @@ pub struct SemanticAnalyzer {
     loop_depth: usize,
 
     errors: Vec<ErrT>,
-}
-
-fn new_type_env_impl() -> TypeEnv {
-    let mut type_env = TypeEnv::new();
-
-    type_env.insert("int".to_string(), PrimitiveType::Int.into());
-    type_env.insert("float".to_string(), PrimitiveType::Float.into());
-    type_env.insert("char".to_string(), PrimitiveType::Char.into());
-    type_env.insert("void".to_string(), PrimitiveType::Void.into());
-    type_env.insert("schar".to_string(), PrimitiveType::SignedChar.into());
-    type_env.insert("sshort".to_string(), PrimitiveType::SignedShort.into());
-    type_env.insert("sint".to_string(), PrimitiveType::SignedInt.into());
-
-    type_env
-}
-
-fn new_func_env_impl() -> FuncEnv {
-    let mut func_env = FuncEnv::new();
-
-    func_env.insert(
-        "print".to_string(),
-        (
-            PrimitiveType::Void.into(),
-            vec![PrimitiveType::Ptr(Box::new(PrimitiveType::Char.into())).into()],
-        ),
-    );
-
-    func_env
-}
-
-fn new_vars_env_impl() -> VarEnv {
-    let mut env = HashMap::new();
-
-    env.insert("true".to_string(), PrimitiveType::Char.into());
-    env.insert("false".to_string(), PrimitiveType::Char.into());
-
-    env
+    runtime_type_struct_definition: Type,
 }
 
 impl SemanticAnalyzer {
     fn new() -> Self {
+        let mut runtime_type_fields = HashMap::new();
+        runtime_type_fields.insert(
+            "name".to_string(),
+            Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
+                PrimitiveType::Char,
+            )))),
+        );
+        let runtime_type_struct_definition = Type::Struct {
+            name: "Type".to_string(),
+            fields: runtime_type_fields,
+        };
+
+        let mut type_env = TypeEnv::new();
+        type_env.insert("int".to_string(), PrimitiveType::Int.into());
+        type_env.insert("float".to_string(), PrimitiveType::Float.into());
+        type_env.insert("char".to_string(), PrimitiveType::Char.into());
+        type_env.insert("void".to_string(), PrimitiveType::Void.into());
+        type_env.insert("schar".to_string(), PrimitiveType::SignedChar.into());
+        type_env.insert("sshort".to_string(), PrimitiveType::SignedShort.into());
+        type_env.insert("sint".to_string(), PrimitiveType::SignedInt.into());
+        type_env.insert("Type".to_string(), runtime_type_struct_definition.clone());
+
+        let mut func_env = FuncEnv::new();
+        func_env.insert(
+            "print".to_string(),
+            (
+                PrimitiveType::Void.into(),
+                vec![PrimitiveType::Ptr(Box::new(PrimitiveType::Char.into())).into()],
+            ),
+        );
+        func_env.insert(
+            "make".to_string(),
+            (
+                Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
+                    PrimitiveType::Void,
+                )))),
+                vec![runtime_type_struct_definition.clone()],
+            ),
+        );
+
+        let mut global_vars = VarEnv::new();
+        global_vars.insert("true".to_string(), PrimitiveType::Char.into());
+        global_vars.insert("false".to_string(), PrimitiveType::Char.into());
+
+        // Use the exact type names (as keys in type_env) for the suffix
+        let primitive_types_for_consts = vec![
+            "int", "float", "char", "void", "schar", "sshort", "sint", // Could also add "Type"
+        ];
+
+        for type_name_str in primitive_types_for_consts {
+            // e.g., TYPE_int, TYPE_float
+            let const_name = format!("TYPE_{}", type_name_str);
+            global_vars.insert(const_name, runtime_type_struct_definition.clone());
+        }
+
         Self {
-            type_env: new_type_env_impl(),
-            func_env: new_func_env_impl(),
-            var_env_stack: vec![new_vars_env_impl()],
+            type_env,
+            func_env,
+            var_env_stack: vec![global_vars],
             current_function_return_type: None,
             loop_depth: 0,
             errors: Vec::new(),
+            runtime_type_struct_definition,
         }
     }
 
@@ -275,21 +295,20 @@ impl SemanticAnalyzer {
                     name: struct_name_spanned,
                     fields,
                 } => {
-                    let (s_name, s_name_s) = struct_name_spanned;
+                    let (s_name, s_name_s) = struct_name_spanned; // s_name is the original case, e.g., "User"
 
                     if self.type_env.contains_key(*s_name) {
                         self.add_error(
                             format!("Struct '{}' already defined", s_name),
                             s_name_s.to_owned(),
                         );
-
                         continue;
                     }
 
                     let mut fields_map = HashMap::new();
+                    let mut field_resolution_ok = true;
                     for field_node_spanned in fields {
                         let (((f_name, f_name_s), f_type_node_s), _) = field_node_spanned;
-
                         if fields_map.contains_key(*f_name) {
                             self.add_error_with_labels(
                                 format!(
@@ -299,27 +318,48 @@ impl SemanticAnalyzer {
                                 f_name_s.clone(),
                                 vec![(format!("Field '{}' redefined", f_name), f_name_s.clone())],
                             );
-
+                            field_resolution_ok = false;
                             break;
                         }
-
                         if let Ok(ty) = self.resolve_type_node(&f_type_node_s) {
-                            if !fields_map.contains_key(*f_name) {
-                                fields_map.insert(f_name.to_string(), ty);
-                            }
+                            fields_map.insert(f_name.to_string(), ty);
                         } else {
+                            field_resolution_ok = false;
                             break;
                         }
                     }
 
-                    if fields_map.len() == fields.len() {
-                        self.type_env.insert(
-                            s_name.to_string(),
-                            Type::Struct {
-                                name: s_name.to_string(),
-                                fields: fields_map,
-                            },
-                        );
+                    if field_resolution_ok && fields_map.len() == fields.len() {
+                        let user_struct_definition = Type::Struct {
+                            name: s_name.to_string(),
+                            fields: fields_map,
+                        };
+                        self.type_env
+                            .insert(s_name.to_string(), user_struct_definition);
+
+                        // Use original struct name casing for the TYPE_ constant
+                        // e.g., struct User -> TYPE_User
+                        let type_const_name = format!("TYPE_{}", s_name);
+
+                        if let Some(global_scope) = self.var_env_stack.first_mut() {
+                            if global_scope.contains_key(&type_const_name) {
+                                self.add_error(
+                                    format!("Type constant '{}' would conflict with an existing global variable.", type_const_name),
+                                    s_name_s.to_owned(),
+                                );
+                            } else {
+                                global_scope.insert(
+                                    type_const_name,
+                                    self.runtime_type_struct_definition.clone(),
+                                );
+                            }
+                        } else {
+                            self.add_error(
+                                "Internal error: Global scope not found for type constant."
+                                    .to_string(),
+                                s_name_s.to_owned(),
+                            );
+                        }
                     }
                 }
 
@@ -682,63 +722,81 @@ impl SemanticAnalyzer {
             Expression::UnaryOp {
                 op,
                 expr: inner_expr_s,
-            } => {
-                let operand_type = self.type_of_expr(inner_expr_s)?;
-                match op {
-                    UnaryOp::Neg => match operand_type {
-                        Type::Primitive(PrimitiveType::Int) => {
-                            Ok(Type::Primitive(PrimitiveType::Int))
+            } => match op {
+                UnaryOp::AddressOf => {
+                    let lvalue_type = match &inner_expr_s.0 {
+                        Expression::Variable(var_name) => {
+                            self.lookup_variable(&(var_name, inner_expr_s.1.clone()))?
                         }
-                        Type::Primitive(PrimitiveType::Float) => {
-                            Ok(Type::Primitive(PrimitiveType::Float))
-                        }
+
+                        Expression::StructFieldAccess { .. } => self.type_of_expr(inner_expr_s)?,
+
                         _ => {
                             self.add_error(
                                 format!(
-                                    "Unary '-' operator cannot be applied to type '{}'",
-                                    operand_type
+                                    "Cannot take address of non-lvalue expression '{:?}'",
+                                    inner_expr_s.0
                                 ),
-                                expr_span.clone(),
-                            );
-                            Err(())
-                        }
-                    },
-
-                    UnaryOp::Not => {
-                        self.expect_boolean_condition(&operand_type, inner_expr_s.1.clone())?;
-                        Ok(Type::Primitive(PrimitiveType::Char))
-                    }
-
-                    UnaryOp::Deref => match operand_type {
-                        Type::Primitive(PrimitiveType::Ptr(pointee_type)) => Ok(*pointee_type),
-                        _ => {
-                            self.add_error(
-                                format!("Cannot dereference non-pointer type '{}'", operand_type),
-                                expr_span.clone(),
-                            );
-                            Err(())
-                        }
-                    },
-
-                    UnaryOp::AddressOf => {
-                        if let Expression::Variable(var_name) = inner_expr_s.0 {
-                            let var_type =
-                                self.lookup_variable(&(var_name, inner_expr_s.1.clone()))?;
-                            Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(var_type))))
-                        } else {
-                            self.add_error(
-                                "Cannot take address of non-lvalue expression".to_string(),
                                 inner_expr_s.1.clone(),
                             );
-                            Err(())
+                            return Err(());
                         }
+                    };
+
+                    Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(lvalue_type))))
+                }
+
+                _ => {
+                    let operand_type = self.type_of_expr(inner_expr_s)?;
+
+                    match op {
+                        UnaryOp::Neg => match operand_type {
+                            Type::Primitive(PrimitiveType::Int) => {
+                                Ok(Type::Primitive(PrimitiveType::Int))
+                            }
+                            Type::Primitive(PrimitiveType::Float) => {
+                                Ok(Type::Primitive(PrimitiveType::Float))
+                            }
+                            _ => {
+                                self.add_error(
+                                    format!(
+                                        "Unary '-' operator cannot be applied to type '{}'",
+                                        operand_type
+                                    ),
+                                    expr_span.clone(),
+                                );
+                                Err(())
+                            }
+                        },
+
+                        UnaryOp::Not => {
+                            self.expect_boolean_condition(&operand_type, inner_expr_s.1.clone())?;
+                            Ok(Type::Primitive(PrimitiveType::Char))
+                        }
+
+                        UnaryOp::Deref => match operand_type {
+                            Type::Primitive(PrimitiveType::Ptr(pointee_type)) => Ok(*pointee_type),
+                            _ => {
+                                self.add_error(
+                                    format!(
+                                        "Cannot dereference non-pointer type '{}'",
+                                        operand_type
+                                    ),
+                                    expr_span.clone(),
+                                );
+                                Err(())
+                            }
+                        },
+
+                        UnaryOp::AddressOf => unreachable!(),
                     }
                 }
-            }
+            },
 
             Expression::BinOp { lhs, op, rhs } => {
                 let lhs_type = self.type_of_expr(lhs)?;
                 let rhs_type = self.type_of_expr(rhs)?;
+
                 match op {
                     BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
                         match (&lhs_type, &rhs_type) {
@@ -818,12 +876,12 @@ impl SemanticAnalyzer {
 
                             _ => {
                                 self.add_error(
-                                    format!(
-                                        "Comparison operator '{:?}' not supported for types '{}' and '{}'",
-                                        op, lhs_type, rhs_type
-                                    ),
-                                    expr_span.clone(),
-                                );
+                                            format!(
+                                                "Comparison operator '{:?}' not supported for types '{}' and '{}'",
+                                                op, lhs_type, rhs_type
+                                            ),
+                                            expr_span.clone(),
+                                        );
                                 Err(())
                             }
                         }
@@ -851,49 +909,118 @@ impl SemanticAnalyzer {
                 args,
             } => {
                 let (f_name, f_span) = func_name_spanned;
-                if let Some((ret_type, param_types)) = self.func_env.get(*f_name).cloned() {
-                    if args.len() != param_types.len() {
+
+                if *f_name == "make" {
+                    if args.len() != 1 {
                         self.add_error(
                             format!(
-                                "Function '{}' expected {} arguments, but got {}",
-                                f_name,
-                                param_types.len(),
+                                "Function 'make' expected 1 argument (a TYPE_XXX constant), but got {}",
                                 args.len()
                             ),
                             expr_span.clone(),
                         );
-
                         return Err(());
                     }
 
-                    for (arg_expr_s, expected_param_type) in args.iter().zip(param_types.iter()) {
-                        let arg_type = self.type_of_expr(arg_expr_s)?;
-                        self.expect_type(
-                            &(expected_param_type.to_owned(), arg_expr_s.1.clone()),
-                            &(arg_type, arg_expr_s.1.clone()),
-                        )?;
+                    let arg_expr_spanned = &args[0];
+                    let arg_type = self.type_of_expr(arg_expr_spanned)?;
+
+                    self.expect_type(
+                        &(
+                            self.runtime_type_struct_definition.clone(),
+                            arg_expr_spanned.1.clone(),
+                        ),
+                        &(arg_type, arg_expr_spanned.1.clone()),
+                    )?;
+
+                    match &arg_expr_spanned.0 {
+                        Expression::Variable(var_name_str) => {
+                            let var_name_val = *var_name_str;
+                            if var_name_val.starts_with("TYPE_") {
+                                let base_name_from_const = &var_name_val["TYPE_".len()..];
+
+                                if let Some(target_type) =
+                                    self.type_env.get(base_name_from_const).cloned()
+                                {
+                                    Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(target_type))))
+                                } else {
+                                    self.add_error(
+                                        format!(
+                                            "Argument '{}' to 'make' does not correspond to a known type (e.g., TYPE_int, TYPE_YourStruct). Could not resolve base name '{}'. Known types: {:?}",
+                                            var_name_val, base_name_from_const, self.type_env.keys()
+                                        ),
+                                        arg_expr_spanned.1.clone(),
+                                    );
+                                    Err(())
+                                }
+                            } else {
+                                self.add_error(
+                                    format!(
+                                        "Argument to 'make' must be a TYPE_XXX constant, found variable '{}'",
+                                        var_name_val
+                                    ),
+                                    arg_expr_spanned.1.clone(),
+                                );
+                                Err(())
+                            }
+                        }
+                        _ => {
+                            self.add_error(
+                                "Argument to 'make' must be a simple TYPE_XXX constant expression"
+                                    .to_string(),
+                                arg_expr_spanned.1.clone(),
+                            );
+                            Err(())
+                        }
                     }
-
-                    Ok(ret_type)
                 } else {
-                    self.add_error(
-                        format!("Call to undefined function '{}'", f_name),
-                        f_span.clone(),
-                    );
+                    if let Some((ret_type, param_types)) = self.func_env.get(*f_name).cloned() {
+                        if args.len() != param_types.len() {
+                            self.add_error(
+                                format!(
+                                    "Function '{}' expected {} arguments, but got {}",
+                                    f_name,
+                                    param_types.len(),
+                                    args.len()
+                                ),
+                                expr_span.clone(),
+                            );
+                            return Err(());
+                        }
 
-                    Err(())
+                        for (arg_expr_s, expected_param_type) in args.iter().zip(param_types.iter())
+                        {
+                            let arg_type = self.type_of_expr(arg_expr_s)?;
+                            self.expect_type(
+                                &(expected_param_type.to_owned(), arg_expr_s.1.clone()),
+                                &(arg_type, arg_expr_s.1.clone()),
+                            )?;
+                        }
+                        Ok(ret_type)
+                    } else {
+                        self.add_error(
+                            format!("Call to undefined function '{}'", f_name),
+                            f_span.clone(),
+                        );
+                        Err(())
+                    }
                 }
             }
 
             Expression::ParenthisedExpr(inner_expr_s) => self.type_of_expr(inner_expr_s),
 
             Expression::Assignment { lhs, rhs } => {
-                let var_name_str = match &lhs.0 {
-                    Expression::Variable(v_name) => v_name,
+                let lhs_type = match &lhs.0 {
+                    Expression::Variable(v_name) => {
+                        self.lookup_variable(&(v_name, lhs.1.clone()))?
+                    }
+                    Expression::StructFieldAccess { .. } => self.type_of_expr(lhs)?,
+
+                    // TODO: Add expression deref
                     _ => {
                         self.add_error(
                             format!(
-                                "Left-hand side of assignment must be a variable, found '{:?}'",
+                                "Left-hand side of assignment must be an l-value (e.g., variable or field access), found '{:?}'",
                                 lhs.0
                             ),
                             lhs.1.clone(),
@@ -902,14 +1029,54 @@ impl SemanticAnalyzer {
                     }
                 };
 
-                let var_type = self.lookup_variable(&(var_name_str, lhs.1.clone()))?;
                 let rhs_type = self.type_of_expr(rhs)?;
 
                 self.expect_type(
-                    &(var_type.clone(), lhs.1.clone()),
+                    &(lhs_type.clone(), lhs.1.clone()),
                     &(rhs_type.clone(), rhs.1.clone()),
                 )?;
-                Ok(var_type)
+
+                Ok(lhs_type)
+            }
+
+            Expression::StructFieldAccess {
+                struct_expr,
+                field_name,
+            } => {
+                let struct_expr_type_val = self.type_of_expr(struct_expr)?;
+                let (field_ident_str, field_ident_span) = field_name;
+
+                match struct_expr_type_val {
+                    Type::Struct {
+                        name: ref struct_definition_name,
+                        ref fields,
+                    } => {
+                        if let Some(field_type) = fields.get(*field_ident_str) {
+                            Ok(field_type.clone())
+                        } else {
+                            self.add_error_with_labels(
+                                format!("Field '{}' not found on struct '{}'", field_ident_str, struct_definition_name),
+                                field_ident_span.clone(),
+                                vec![
+                                    (format!("Struct '{}' (type of this expression) does not have a field named '{}'", struct_definition_name, field_ident_str), struct_expr.1.clone()),
+                                    (format!("No field named '{}' here", field_ident_str), field_ident_span.clone()),
+                                ]
+                            );
+                            Err(())
+                        }
+                    }
+                    _ => {
+                        self.add_error_with_labels(
+                            format!("Cannot access field '{}' on non-struct type '{}'", field_ident_str, struct_expr_type_val),
+                            struct_expr.1.clone(),
+                            vec![
+                                (format!("Expected a struct type for field access, but found type '{}'", struct_expr_type_val), struct_expr.1.clone()),
+                                (format!("Attempting to access field '{}'", field_ident_str), field_ident_span.clone()),
+                            ]
+                        );
+                        Err(())
+                    }
+                }
             }
         }
     }

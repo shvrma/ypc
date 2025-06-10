@@ -1,7 +1,7 @@
 func main() void {
     var S = 5
 
-    var arr *int = make_arr(TYPE_int, S)
+    var arr *int = make(TYPE_int.size * S)
     for var i = 0; i < S; i = i + 1 {
         *(arr + (TYPE_int.size * i)) = 0
     }

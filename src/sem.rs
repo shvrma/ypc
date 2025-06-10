@@ -132,21 +132,9 @@ impl SemanticAnalyzer {
             "make".to_string(),
             (
                 Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
-                    PrimitiveType::Void,
+                    PrimitiveType::Void, // Returns *void
                 )))),
-                vec![runtime_type_struct_definition.clone()],
-            ),
-        );
-        func_env.insert(
-            "make_arr".to_string(),
-            (
-                Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
-                    PrimitiveType::Void,
-                )))),
-                vec![
-                    runtime_type_struct_definition.clone(),
-                    Type::Primitive(PrimitiveType::Int),
-                ],
+                vec![Type::Primitive(PrimitiveType::Int)], // Accepts int
             ),
         );
 
@@ -263,28 +251,40 @@ impl SemanticAnalyzer {
         let (found_ty, found_span) = found;
 
         if expected_ty == found_ty {
-            Ok(())
-        } else if *expected_ty == Type::Primitive(PrimitiveType::Float)
+            return Ok(());
+        }
+
+        if *expected_ty == Type::Primitive(PrimitiveType::Float)
             && *found_ty == Type::Primitive(PrimitiveType::Int)
         {
-            Ok(())
-        } else {
-            self.add_error_with_labels(
-                format!(
-                    "Type mismatch: expected '{}', found '{}'",
-                    expected_ty, found_ty
-                ),
-                expected_span.clone(),
-                vec![
-                    (
-                        format!("Expected type '{}'", expected_ty),
-                        expected_span.clone(),
-                    ),
-                    (format!("Found type '{}'", found_ty), found_span.clone()),
-                ],
-            );
-            Err(())
+            return Ok(());
         }
+
+        if let Type::Primitive(PrimitiveType::Ptr(_ /* expected_pointee_type */)) = expected_ty {
+            if *found_ty
+                == Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
+                    PrimitiveType::Void,
+                ))))
+            {
+                return Ok(());
+            }
+        }
+
+        self.add_error_with_labels(
+            format!(
+                "Type mismatch: expected '{}', found '{}'",
+                expected_ty, found_ty
+            ),
+            expected_span.clone(),
+            vec![
+                (
+                    format!("Expected type '{}'", expected_ty),
+                    expected_span.clone(),
+                ),
+                (format!("Found type '{}'", found_ty), found_span.clone()),
+            ],
+        );
+        Err(())
     }
 
     fn expect_boolean_condition(&mut self, ty: &Type, span: SpanT) -> Result<(), ()> {
@@ -1002,169 +1002,36 @@ impl SemanticAnalyzer {
     ) -> Result<Type, ()> {
         let (f_name, f_name_span) = func_name_spanned;
 
-        if *f_name == "make" {
-            self.type_of_make_call(args, call_expr_span)
-        } else if *f_name == "make_arr" {
-            self.type_of_make_arr_call(args, call_expr_span)
+        if let Some((ret_type, param_types)) = self.func_env.get(*f_name).cloned() {
+            if args.len() != param_types.len() {
+                self.add_error(
+                    format!(
+                        "Function '{}' expected {} arguments, but got {}",
+                        f_name,
+                        param_types.len(),
+                        args.len()
+                    ),
+                    call_expr_span.clone(),
+                );
+                return Err(());
+            }
+
+            for (arg_expr_s, expected_param_type) in args.iter().zip(param_types.iter()) {
+                let arg_type = self.type_of_expr(arg_expr_s)?;
+                self.expect_type(
+                    &(expected_param_type.to_owned(), arg_expr_s.1.clone()),
+                    &(arg_type, arg_expr_s.1.clone()),
+                )?;
+            }
+
+            Ok(ret_type)
         } else {
-            if let Some((ret_type, param_types)) = self.func_env.get(*f_name).cloned() {
-                if args.len() != param_types.len() {
-                    self.add_error(
-                        format!(
-                            "Function '{}' expected {} arguments, but got {}",
-                            f_name,
-                            param_types.len(),
-                            args.len()
-                        ),
-                        call_expr_span.clone(),
-                    );
-                    return Err(());
-                }
-                for (arg_expr_s, expected_param_type) in args.iter().zip(param_types.iter()) {
-                    let arg_type = self.type_of_expr(arg_expr_s)?;
-                    self.expect_type(
-                        &(expected_param_type.to_owned(), arg_expr_s.1.clone()),
-                        &(arg_type, arg_expr_s.1.clone()),
-                    )?;
-                }
-                Ok(ret_type)
-            } else {
-                self.add_error(
-                    format!("Call to undefined function '{}'", f_name),
-                    f_name_span.clone(),
-                );
-                Err(())
-            }
-        }
-    }
-
-    fn type_of_make_call<'a>(
-        &mut self,
-        args: &[Spanned<Expression<'a>>],
-        call_expr_span: &SpanT,
-    ) -> Result<Type, ()> {
-        if args.len() != 1 {
             self.add_error(
-                format!(
-                    "Function 'make' expected 1 argument (a TYPE_XXX constant), but got {}",
-                    args.len()
-                ),
-                call_expr_span.clone(),
+                format!("Call to undefined function '{}'", f_name),
+                f_name_span.clone(),
             );
-            return Err(());
-        }
 
-        let arg_expr_spanned = &args[0];
-        let arg_type = self.type_of_expr(arg_expr_spanned)?;
-
-        self.expect_type(
-            &(
-                self.runtime_type_struct_definition.clone(),
-                arg_expr_spanned.1.clone(),
-            ),
-            &(arg_type, arg_expr_spanned.1.clone()),
-        )?;
-
-        match &arg_expr_spanned.0 {
-            Expression::Variable(var_name_str) => {
-                let var_name_val = *var_name_str;
-                if var_name_val.starts_with("TYPE_") {
-                    let base_name_from_const = &var_name_val["TYPE_".len()..];
-                    if let Some(target_type) = self.type_env.get(base_name_from_const).cloned() {
-                        Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(target_type))))
-                    } else {
-                        self.add_error(
-                            format!("Argument '{}' to 'make' does not correspond to a known type. Could not resolve base name '{}'. Known types: {:?}", var_name_val, base_name_from_const, self.type_env.keys()),
-                            arg_expr_spanned.1.clone(),
-                        );
-                        Err(())
-                    }
-                } else {
-                    self.add_error(
-                        format!(
-                            "Argument to 'make' must be a TYPE_XXX constant, found variable '{}'",
-                            var_name_val
-                        ),
-                        arg_expr_spanned.1.clone(),
-                    );
-                    Err(())
-                }
-            }
-            _ => {
-                self.add_error(
-                    "Argument to 'make' must be a simple TYPE_XXX constant expression".to_string(),
-                    arg_expr_spanned.1.clone(),
-                );
-                Err(())
-            }
-        }
-    }
-
-    fn type_of_make_arr_call<'a>(
-        &mut self,
-        args: &[Spanned<Expression<'a>>],
-        call_expr_span: &SpanT,
-    ) -> Result<Type, ()> {
-        if args.len() != 2 {
-            self.add_error(
-                format!("Function 'make_arr' expected 2 arguments (a TYPE_XXX constant and an integer size), but got {}", args.len()),
-                call_expr_span.clone(),
-            );
-            return Err(());
-        }
-
-        let type_arg_expr_spanned = &args[0];
-        let type_arg_actual_type = self.type_of_expr(type_arg_expr_spanned)?;
-
-        self.expect_type(
-            &(
-                self.runtime_type_struct_definition.clone(),
-                type_arg_expr_spanned.1.clone(),
-            ),
-            &(type_arg_actual_type, type_arg_expr_spanned.1.clone()),
-        )?;
-
-        let size_arg_expr_spanned = &args[1];
-        let size_arg_actual_type = self.type_of_expr(size_arg_expr_spanned)?;
-
-        self.expect_type(
-            &(
-                Type::Primitive(PrimitiveType::Int),
-                size_arg_expr_spanned.1.clone(),
-            ),
-            &(size_arg_actual_type, size_arg_expr_spanned.1.clone()),
-        )?;
-
-        match &type_arg_expr_spanned.0 {
-            Expression::Variable(var_name_str) => {
-                let var_name_val = *var_name_str;
-                if var_name_val.starts_with("TYPE_") {
-                    let base_name_from_const = &var_name_val["TYPE_".len()..];
-                    if let Some(target_type) = self.type_env.get(base_name_from_const).cloned() {
-                        Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(target_type))))
-                    } else {
-                        self.add_error(
-                            format!("Type argument '{}' to 'make_arr' does not correspond to a known type. Could not resolve base name '{}'. Known types: {:?}", var_name_val, base_name_from_const, self.type_env.keys()),
-                            type_arg_expr_spanned.1.clone(),
-                        );
-                        Err(())
-                    }
-                } else {
-                    self.add_error(
-                        format!("First argument to 'make_arr' must be a TYPE_XXX constant, found variable '{}'", var_name_val),
-                        type_arg_expr_spanned.1.clone(),
-                    );
-                    Err(())
-                }
-            }
-            _ => {
-                self.add_error(
-                    "First argument to 'make_arr' must be a simple TYPE_XXX constant expression"
-                        .to_string(),
-                    type_arg_expr_spanned.1.clone(),
-                );
-                Err(())
-            }
+            Err(())
         }
     }
 

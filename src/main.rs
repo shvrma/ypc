@@ -84,6 +84,10 @@ fn process(args: Args) -> Result<()> {
             let mut rep = Report::build(ReportKind::Error, (&args.input, e.span.clone()))
                 .with_message(e.message);
 
+            if e.labels.is_empty() {
+                rep = rep.with_label(Label::new((&args.input, e.span)).with_color(colors.next()));
+            }
+
             for (l_msg, l_span) in e.labels {
                 rep = rep.with_label(
                     Label::new((&args.input, l_span))

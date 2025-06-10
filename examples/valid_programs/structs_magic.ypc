@@ -5,10 +5,9 @@ struct User {
 }
 
 func main() void {
-    // Allocate the user, dereference to value and copy it locally
-    var me = *make(TYPE_User)
+    var me *User = make(TYPE_User.size)
 
-    me.id = "uniq"
-    me.name = "Imaginary Name"
-    me.age = 19
+    (*me).id = "uniq"
+    (*me).name = "Imaginary Name"
+    (*me).age = 19
 }

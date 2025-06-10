@@ -104,6 +104,7 @@ impl SemanticAnalyzer {
                 PrimitiveType::Char,
             )))),
         );
+        runtime_type_fields.insert("size".to_string(), Type::Primitive(PrimitiveType::Int));
         let runtime_type_struct_definition = Type::Struct {
             name: "Type".to_string(),
             fields: runtime_type_fields,
@@ -136,18 +137,27 @@ impl SemanticAnalyzer {
                 vec![runtime_type_struct_definition.clone()],
             ),
         );
+        func_env.insert(
+            "make_arr".to_string(),
+            (
+                Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
+                    PrimitiveType::Void,
+                )))),
+                vec![
+                    runtime_type_struct_definition.clone(),
+                    Type::Primitive(PrimitiveType::Int),
+                ],
+            ),
+        );
 
         let mut global_vars = VarEnv::new();
         global_vars.insert("true".to_string(), PrimitiveType::Char.into());
         global_vars.insert("false".to_string(), PrimitiveType::Char.into());
 
-        // Use the exact type names (as keys in type_env) for the suffix
-        let primitive_types_for_consts = vec![
-            "int", "float", "char", "void", "schar", "sshort", "sint", // Could also add "Type"
-        ];
+        let primitive_types_for_consts =
+            vec!["int", "float", "char", "void", "schar", "sshort", "sint"];
 
         for type_name_str in primitive_types_for_consts {
-            // e.g., TYPE_int, TYPE_float
             let const_name = format!("TYPE_{}", type_name_str);
             global_vars.insert(const_name, runtime_type_struct_definition.clone());
         }
@@ -722,361 +732,461 @@ impl SemanticAnalyzer {
             Expression::UnaryOp {
                 op,
                 expr: inner_expr_s,
-            } => match op {
-                UnaryOp::AddressOf => {
-                    let lvalue_type = match &inner_expr_s.0 {
-                        Expression::Variable(var_name) => {
-                            self.lookup_variable(&(var_name, inner_expr_s.1.clone()))?
-                        }
+            } => self.type_of_unary_op(op, inner_expr_s, expr_span),
 
-                        Expression::StructFieldAccess { .. } => self.type_of_expr(inner_expr_s)?,
+            Expression::BinOp { lhs, op, rhs } => self.type_of_binary_op(lhs, op, rhs, expr_span),
 
-                        _ => {
-                            self.add_error(
-                                format!(
-                                    "Cannot take address of non-lvalue expression '{:?}'",
-                                    inner_expr_s.0
-                                ),
-                                inner_expr_s.1.clone(),
-                            );
-                            return Err(());
-                        }
-                    };
-
-                    Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(lvalue_type))))
-                }
-
-                _ => {
-                    let operand_type = self.type_of_expr(inner_expr_s)?;
-
-                    match op {
-                        UnaryOp::Neg => match operand_type {
-                            Type::Primitive(PrimitiveType::Int) => {
-                                Ok(Type::Primitive(PrimitiveType::Int))
-                            }
-                            Type::Primitive(PrimitiveType::Float) => {
-                                Ok(Type::Primitive(PrimitiveType::Float))
-                            }
-                            _ => {
-                                self.add_error(
-                                    format!(
-                                        "Unary '-' operator cannot be applied to type '{}'",
-                                        operand_type
-                                    ),
-                                    expr_span.clone(),
-                                );
-                                Err(())
-                            }
-                        },
-
-                        UnaryOp::Not => {
-                            self.expect_boolean_condition(&operand_type, inner_expr_s.1.clone())?;
-                            Ok(Type::Primitive(PrimitiveType::Char))
-                        }
-
-                        UnaryOp::Deref => match operand_type {
-                            Type::Primitive(PrimitiveType::Ptr(pointee_type)) => Ok(*pointee_type),
-                            _ => {
-                                self.add_error(
-                                    format!(
-                                        "Cannot dereference non-pointer type '{}'",
-                                        operand_type
-                                    ),
-                                    expr_span.clone(),
-                                );
-                                Err(())
-                            }
-                        },
-
-                        UnaryOp::AddressOf => unreachable!(),
-                    }
-                }
-            },
-
-            Expression::BinOp { lhs, op, rhs } => {
-                let lhs_type = self.type_of_expr(lhs)?;
-                let rhs_type = self.type_of_expr(rhs)?;
-
-                match op {
-                    BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                        match (&lhs_type, &rhs_type) {
-                            (
-                                Type::Primitive(PrimitiveType::Int),
-                                Type::Primitive(PrimitiveType::Int),
-                            ) => Ok(Type::Primitive(PrimitiveType::Int)),
-
-                            (
-                                Type::Primitive(PrimitiveType::Float),
-                                Type::Primitive(PrimitiveType::Float),
-                            ) => Ok(Type::Primitive(PrimitiveType::Float)),
-
-                            (
-                                Type::Primitive(PrimitiveType::Int),
-                                Type::Primitive(PrimitiveType::Float),
-                            ) => Ok(Type::Primitive(PrimitiveType::Float)),
-
-                            (
-                                Type::Primitive(PrimitiveType::Float),
-                                Type::Primitive(PrimitiveType::Int),
-                            ) => Ok(Type::Primitive(PrimitiveType::Float)),
-
-                            (
-                                Type::Primitive(PrimitiveType::Ptr(pt)),
-                                Type::Primitive(PrimitiveType::Int),
-                            ) if *op == BinOp::Add || *op == BinOp::Sub => {
-                                Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone())))
-                            }
-
-                            (
-                                Type::Primitive(PrimitiveType::Int),
-                                Type::Primitive(PrimitiveType::Ptr(pt)),
-                            ) if *op == BinOp::Add => {
-                                Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone())))
-                            }
-
-                            _ => {
-                                self.add_error(
-                                    format!(
-                                        "Operator '{:?}' not supported for types '{}' and '{}'",
-                                        op, lhs_type, rhs_type
-                                    ),
-                                    expr_span.clone(),
-                                );
-                                Err(())
-                            }
-                        }
-                    }
-
-                    BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Leq | BinOp::Geq => {
-                        match (&lhs_type, &rhs_type) {
-                            (
-                                Type::Primitive(PrimitiveType::Int),
-                                Type::Primitive(PrimitiveType::Int),
-                            )
-                            | (
-                                Type::Primitive(PrimitiveType::Float),
-                                Type::Primitive(PrimitiveType::Float),
-                            )
-                            | (
-                                Type::Primitive(PrimitiveType::Char),
-                                Type::Primitive(PrimitiveType::Char),
-                            )
-                            | (
-                                Type::Primitive(PrimitiveType::Ptr(_)),
-                                Type::Primitive(PrimitiveType::Ptr(_)),
-                            ) => Ok(Type::Primitive(PrimitiveType::Char)),
-                            (
-                                Type::Primitive(PrimitiveType::Int),
-                                Type::Primitive(PrimitiveType::Float),
-                            )
-                            | (
-                                Type::Primitive(PrimitiveType::Float),
-                                Type::Primitive(PrimitiveType::Int),
-                            ) => Ok(Type::Primitive(PrimitiveType::Char)),
-
-                            _ => {
-                                self.add_error(
-                                            format!(
-                                                "Comparison operator '{:?}' not supported for types '{}' and '{}'",
-                                                op, lhs_type, rhs_type
-                                            ),
-                                            expr_span.clone(),
-                                        );
-                                Err(())
-                            }
-                        }
-                    }
-
-                    BinOp::And | BinOp::Or => {
-                        self.expect_boolean_condition(&lhs_type, lhs.1.clone())?;
-                        self.expect_boolean_condition(&rhs_type, rhs.1.clone())?;
-                        Ok(Type::Primitive(PrimitiveType::Char))
-                    }
-
-                    _ => {
-                        self.add_error(
-                            format!("Unsupported binary operator '{:?}'", op),
-                            expr_span.clone(),
-                        );
-
-                        Err(())
-                    }
-                }
-            }
-
-            Expression::FuncCall {
-                func: func_name_spanned,
-                args,
-            } => {
-                let (f_name, f_span) = func_name_spanned;
-
-                if *f_name == "make" {
-                    if args.len() != 1 {
-                        self.add_error(
-                            format!(
-                                "Function 'make' expected 1 argument (a TYPE_XXX constant), but got {}",
-                                args.len()
-                            ),
-                            expr_span.clone(),
-                        );
-                        return Err(());
-                    }
-
-                    let arg_expr_spanned = &args[0];
-                    let arg_type = self.type_of_expr(arg_expr_spanned)?;
-
-                    self.expect_type(
-                        &(
-                            self.runtime_type_struct_definition.clone(),
-                            arg_expr_spanned.1.clone(),
-                        ),
-                        &(arg_type, arg_expr_spanned.1.clone()),
-                    )?;
-
-                    match &arg_expr_spanned.0 {
-                        Expression::Variable(var_name_str) => {
-                            let var_name_val = *var_name_str;
-                            if var_name_val.starts_with("TYPE_") {
-                                let base_name_from_const = &var_name_val["TYPE_".len()..];
-
-                                if let Some(target_type) =
-                                    self.type_env.get(base_name_from_const).cloned()
-                                {
-                                    Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(target_type))))
-                                } else {
-                                    self.add_error(
-                                        format!(
-                                            "Argument '{}' to 'make' does not correspond to a known type (e.g., TYPE_int, TYPE_YourStruct). Could not resolve base name '{}'. Known types: {:?}",
-                                            var_name_val, base_name_from_const, self.type_env.keys()
-                                        ),
-                                        arg_expr_spanned.1.clone(),
-                                    );
-                                    Err(())
-                                }
-                            } else {
-                                self.add_error(
-                                    format!(
-                                        "Argument to 'make' must be a TYPE_XXX constant, found variable '{}'",
-                                        var_name_val
-                                    ),
-                                    arg_expr_spanned.1.clone(),
-                                );
-                                Err(())
-                            }
-                        }
-                        _ => {
-                            self.add_error(
-                                "Argument to 'make' must be a simple TYPE_XXX constant expression"
-                                    .to_string(),
-                                arg_expr_spanned.1.clone(),
-                            );
-                            Err(())
-                        }
-                    }
-                } else {
-                    if let Some((ret_type, param_types)) = self.func_env.get(*f_name).cloned() {
-                        if args.len() != param_types.len() {
-                            self.add_error(
-                                format!(
-                                    "Function '{}' expected {} arguments, but got {}",
-                                    f_name,
-                                    param_types.len(),
-                                    args.len()
-                                ),
-                                expr_span.clone(),
-                            );
-                            return Err(());
-                        }
-
-                        for (arg_expr_s, expected_param_type) in args.iter().zip(param_types.iter())
-                        {
-                            let arg_type = self.type_of_expr(arg_expr_s)?;
-                            self.expect_type(
-                                &(expected_param_type.to_owned(), arg_expr_s.1.clone()),
-                                &(arg_type, arg_expr_s.1.clone()),
-                            )?;
-                        }
-                        Ok(ret_type)
-                    } else {
-                        self.add_error(
-                            format!("Call to undefined function '{}'", f_name),
-                            f_span.clone(),
-                        );
-                        Err(())
-                    }
-                }
-            }
+            Expression::FuncCall { func, args } => self.type_of_func_call(func, args, expr_span),
 
             Expression::ParenthisedExpr(inner_expr_s) => self.type_of_expr(inner_expr_s),
 
-            Expression::Assignment { lhs, rhs } => {
-                let lhs_type = match &lhs.0 {
-                    Expression::Variable(v_name) => {
-                        self.lookup_variable(&(v_name, lhs.1.clone()))?
-                    }
-                    Expression::StructFieldAccess { .. } => self.type_of_expr(lhs)?,
+            Expression::Assignment { lhs, rhs } => self.type_of_assignment(lhs, rhs),
 
-                    // TODO: Add expression deref
+            Expression::StructFieldAccess {
+                struct_expr,
+                field_name,
+            } => self.type_of_struct_field_access(struct_expr, field_name),
+        }
+    }
+
+    fn type_of_unary_op<'a>(
+        &mut self,
+        op: &UnaryOp,
+        inner_expr_s: &Spanned<Expression<'a>>,
+        op_expr_span: &SpanT,
+    ) -> Result<Type, ()> {
+        match op {
+            UnaryOp::AddressOf => {
+                let lvalue_type = match &inner_expr_s.0 {
+                    Expression::Variable(var_name) => {
+                        self.lookup_variable(&(var_name, inner_expr_s.1.clone()))?
+                    }
+
+                    Expression::StructFieldAccess { .. } => self.type_of_expr(inner_expr_s)?,
                     _ => {
                         self.add_error(
                             format!(
-                                "Left-hand side of assignment must be an l-value (e.g., variable or field access), found '{:?}'",
-                                lhs.0
+                                "Cannot take address of non-lvalue expression '{:?}'",
+                                inner_expr_s.0
                             ),
-                            lhs.1.clone(),
+                            inner_expr_s.1.clone(),
                         );
                         return Err(());
                     }
                 };
 
-                let rhs_type = self.type_of_expr(rhs)?;
-
-                self.expect_type(
-                    &(lhs_type.clone(), lhs.1.clone()),
-                    &(rhs_type.clone(), rhs.1.clone()),
-                )?;
-
-                Ok(lhs_type)
+                Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(lvalue_type))))
             }
 
-            Expression::StructFieldAccess {
-                struct_expr,
-                field_name,
-            } => {
-                let struct_expr_type_val = self.type_of_expr(struct_expr)?;
-                let (field_ident_str, field_ident_span) = field_name;
+            _ => {
+                let operand_type = self.type_of_expr(inner_expr_s)?;
 
-                match struct_expr_type_val {
-                    Type::Struct {
-                        name: ref struct_definition_name,
-                        ref fields,
-                    } => {
-                        if let Some(field_type) = fields.get(*field_ident_str) {
-                            Ok(field_type.clone())
-                        } else {
-                            self.add_error_with_labels(
-                                format!("Field '{}' not found on struct '{}'", field_ident_str, struct_definition_name),
-                                field_ident_span.clone(),
-                                vec![
-                                    (format!("Struct '{}' (type of this expression) does not have a field named '{}'", struct_definition_name, field_ident_str), struct_expr.1.clone()),
-                                    (format!("No field named '{}' here", field_ident_str), field_ident_span.clone()),
-                                ]
+                match op {
+                    UnaryOp::Neg => match operand_type {
+                        Type::Primitive(PrimitiveType::Int) => {
+                            Ok(Type::Primitive(PrimitiveType::Int))
+                        }
+                        Type::Primitive(PrimitiveType::Float) => {
+                            Ok(Type::Primitive(PrimitiveType::Float))
+                        }
+                        _ => {
+                            self.add_error(
+                                format!(
+                                    "Unary '-' operator cannot be applied to type '{}'",
+                                    operand_type
+                                ),
+                                op_expr_span.clone(),
                             );
                             Err(())
                         }
+                    },
+
+                    UnaryOp::Not => {
+                        self.expect_boolean_condition(&operand_type, inner_expr_s.1.clone())?;
+                        Ok(Type::Primitive(PrimitiveType::Char))
                     }
+
+                    UnaryOp::Deref => match operand_type {
+                        Type::Primitive(PrimitiveType::Ptr(pointee_type)) => Ok(*pointee_type),
+                        _ => {
+                            self.add_error(
+                                format!("Cannot dereference non-pointer type '{}'", operand_type),
+                                op_expr_span.clone(),
+                            );
+                            Err(())
+                        }
+                    },
+
+                    UnaryOp::AddressOf => unreachable!(),
+                }
+            }
+        }
+    }
+
+    fn type_of_binary_op<'a>(
+        &mut self,
+        lhs_s: &Spanned<Expression<'a>>,
+        op: &BinOp,
+        rhs_s: &Spanned<Expression<'a>>,
+        op_expr_span: &SpanT,
+    ) -> Result<Type, ()> {
+        let lhs_type = self.type_of_expr(lhs_s)?;
+        let rhs_type = self.type_of_expr(rhs_s)?;
+
+        match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                match (&lhs_type, &rhs_type) {
+                    (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
+                        Ok(Type::Primitive(PrimitiveType::Int))
+                    }
+                    (
+                        Type::Primitive(PrimitiveType::Float),
+                        Type::Primitive(PrimitiveType::Float),
+                    ) => Ok(Type::Primitive(PrimitiveType::Float)),
+                    (
+                        Type::Primitive(PrimitiveType::Int),
+                        Type::Primitive(PrimitiveType::Float),
+                    ) => Ok(Type::Primitive(PrimitiveType::Float)),
+                    (
+                        Type::Primitive(PrimitiveType::Float),
+                        Type::Primitive(PrimitiveType::Int),
+                    ) => Ok(Type::Primitive(PrimitiveType::Float)),
+                    (
+                        Type::Primitive(PrimitiveType::Ptr(pt)),
+                        Type::Primitive(PrimitiveType::Int),
+                    ) if *op == BinOp::Add || *op == BinOp::Sub => {
+                        Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone())))
+                    }
+                    (
+                        Type::Primitive(PrimitiveType::Int),
+                        Type::Primitive(PrimitiveType::Ptr(pt)),
+                    ) if *op == BinOp::Add => Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone()))),
+
                     _ => {
-                        self.add_error_with_labels(
-                            format!("Cannot access field '{}' on non-struct type '{}'", field_ident_str, struct_expr_type_val),
-                            struct_expr.1.clone(),
-                            vec![
-                                (format!("Expected a struct type for field access, but found type '{}'", struct_expr_type_val), struct_expr.1.clone()),
-                                (format!("Attempting to access field '{}'", field_ident_str), field_ident_span.clone()),
-                            ]
+                        self.add_error(
+                            format!(
+                                "Operator '{:?}' not supported for types '{}' and '{}'",
+                                op, lhs_type, rhs_type
+                            ),
+                            op_expr_span.clone(),
                         );
                         Err(())
                     }
                 }
+            }
+            BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Leq | BinOp::Geq => {
+                match (&lhs_type, &rhs_type) {
+                    (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int))
+                    | (
+                        Type::Primitive(PrimitiveType::Float),
+                        Type::Primitive(PrimitiveType::Float),
+                    )
+                    | (
+                        Type::Primitive(PrimitiveType::Char),
+                        Type::Primitive(PrimitiveType::Char),
+                    )
+                    | (
+                        Type::Primitive(PrimitiveType::Ptr(_)),
+                        Type::Primitive(PrimitiveType::Ptr(_)),
+                    ) => Ok(Type::Primitive(PrimitiveType::Char)),
+                    (
+                        Type::Primitive(PrimitiveType::Int),
+                        Type::Primitive(PrimitiveType::Float),
+                    )
+                    | (
+                        Type::Primitive(PrimitiveType::Float),
+                        Type::Primitive(PrimitiveType::Int),
+                    ) => Ok(Type::Primitive(PrimitiveType::Char)),
+
+                    _ => {
+                        self.add_error(
+                            format!(
+                                "Comparison operator '{:?}' not supported for types '{}' and '{}'",
+                                op, lhs_type, rhs_type
+                            ),
+                            op_expr_span.clone(),
+                        );
+                        Err(())
+                    }
+                }
+            }
+
+            BinOp::And | BinOp::Or => {
+                self.expect_boolean_condition(&lhs_type, lhs_s.1.clone())?;
+                self.expect_boolean_condition(&rhs_type, rhs_s.1.clone())?;
+                Ok(Type::Primitive(PrimitiveType::Char))
+            }
+
+            _ => {
+                self.add_error(
+                    format!("Unsupported binary operator '{:?}'", op),
+                    op_expr_span.clone(),
+                );
+                Err(())
+            }
+        }
+    }
+
+    fn type_of_func_call<'a>(
+        &mut self,
+        func_name_spanned: &Spanned<&'a str>,
+        args: &[Spanned<Expression<'a>>],
+        call_expr_span: &SpanT,
+    ) -> Result<Type, ()> {
+        let (f_name, f_name_span) = func_name_spanned;
+
+        if *f_name == "make" {
+            self.type_of_make_call(args, call_expr_span)
+        } else if *f_name == "make_arr" {
+            self.type_of_make_arr_call(args, call_expr_span)
+        } else {
+            if let Some((ret_type, param_types)) = self.func_env.get(*f_name).cloned() {
+                if args.len() != param_types.len() {
+                    self.add_error(
+                        format!(
+                            "Function '{}' expected {} arguments, but got {}",
+                            f_name,
+                            param_types.len(),
+                            args.len()
+                        ),
+                        call_expr_span.clone(),
+                    );
+                    return Err(());
+                }
+                for (arg_expr_s, expected_param_type) in args.iter().zip(param_types.iter()) {
+                    let arg_type = self.type_of_expr(arg_expr_s)?;
+                    self.expect_type(
+                        &(expected_param_type.to_owned(), arg_expr_s.1.clone()),
+                        &(arg_type, arg_expr_s.1.clone()),
+                    )?;
+                }
+                Ok(ret_type)
+            } else {
+                self.add_error(
+                    format!("Call to undefined function '{}'", f_name),
+                    f_name_span.clone(),
+                );
+                Err(())
+            }
+        }
+    }
+
+    fn type_of_make_call<'a>(
+        &mut self,
+        args: &[Spanned<Expression<'a>>],
+        call_expr_span: &SpanT,
+    ) -> Result<Type, ()> {
+        if args.len() != 1 {
+            self.add_error(
+                format!(
+                    "Function 'make' expected 1 argument (a TYPE_XXX constant), but got {}",
+                    args.len()
+                ),
+                call_expr_span.clone(),
+            );
+            return Err(());
+        }
+
+        let arg_expr_spanned = &args[0];
+        let arg_type = self.type_of_expr(arg_expr_spanned)?;
+
+        self.expect_type(
+            &(
+                self.runtime_type_struct_definition.clone(),
+                arg_expr_spanned.1.clone(),
+            ),
+            &(arg_type, arg_expr_spanned.1.clone()),
+        )?;
+
+        match &arg_expr_spanned.0 {
+            Expression::Variable(var_name_str) => {
+                let var_name_val = *var_name_str;
+                if var_name_val.starts_with("TYPE_") {
+                    let base_name_from_const = &var_name_val["TYPE_".len()..];
+                    if let Some(target_type) = self.type_env.get(base_name_from_const).cloned() {
+                        Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(target_type))))
+                    } else {
+                        self.add_error(
+                            format!("Argument '{}' to 'make' does not correspond to a known type. Could not resolve base name '{}'. Known types: {:?}", var_name_val, base_name_from_const, self.type_env.keys()),
+                            arg_expr_spanned.1.clone(),
+                        );
+                        Err(())
+                    }
+                } else {
+                    self.add_error(
+                        format!(
+                            "Argument to 'make' must be a TYPE_XXX constant, found variable '{}'",
+                            var_name_val
+                        ),
+                        arg_expr_spanned.1.clone(),
+                    );
+                    Err(())
+                }
+            }
+            _ => {
+                self.add_error(
+                    "Argument to 'make' must be a simple TYPE_XXX constant expression".to_string(),
+                    arg_expr_spanned.1.clone(),
+                );
+                Err(())
+            }
+        }
+    }
+
+    fn type_of_make_arr_call<'a>(
+        &mut self,
+        args: &[Spanned<Expression<'a>>],
+        call_expr_span: &SpanT,
+    ) -> Result<Type, ()> {
+        if args.len() != 2 {
+            self.add_error(
+                format!("Function 'make_arr' expected 2 arguments (a TYPE_XXX constant and an integer size), but got {}", args.len()),
+                call_expr_span.clone(),
+            );
+            return Err(());
+        }
+
+        let type_arg_expr_spanned = &args[0];
+        let type_arg_actual_type = self.type_of_expr(type_arg_expr_spanned)?;
+
+        self.expect_type(
+            &(
+                self.runtime_type_struct_definition.clone(),
+                type_arg_expr_spanned.1.clone(),
+            ),
+            &(type_arg_actual_type, type_arg_expr_spanned.1.clone()),
+        )?;
+
+        let size_arg_expr_spanned = &args[1];
+        let size_arg_actual_type = self.type_of_expr(size_arg_expr_spanned)?;
+
+        self.expect_type(
+            &(
+                Type::Primitive(PrimitiveType::Int),
+                size_arg_expr_spanned.1.clone(),
+            ),
+            &(size_arg_actual_type, size_arg_expr_spanned.1.clone()),
+        )?;
+
+        match &type_arg_expr_spanned.0 {
+            Expression::Variable(var_name_str) => {
+                let var_name_val = *var_name_str;
+                if var_name_val.starts_with("TYPE_") {
+                    let base_name_from_const = &var_name_val["TYPE_".len()..];
+                    if let Some(target_type) = self.type_env.get(base_name_from_const).cloned() {
+                        Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(target_type))))
+                    } else {
+                        self.add_error(
+                            format!("Type argument '{}' to 'make_arr' does not correspond to a known type. Could not resolve base name '{}'. Known types: {:?}", var_name_val, base_name_from_const, self.type_env.keys()),
+                            type_arg_expr_spanned.1.clone(),
+                        );
+                        Err(())
+                    }
+                } else {
+                    self.add_error(
+                        format!("First argument to 'make_arr' must be a TYPE_XXX constant, found variable '{}'", var_name_val),
+                        type_arg_expr_spanned.1.clone(),
+                    );
+                    Err(())
+                }
+            }
+            _ => {
+                self.add_error(
+                    "First argument to 'make_arr' must be a simple TYPE_XXX constant expression"
+                        .to_string(),
+                    type_arg_expr_spanned.1.clone(),
+                );
+                Err(())
+            }
+        }
+    }
+
+    fn type_of_assignment<'a>(
+        &mut self,
+        lhs_s: &Spanned<Expression<'a>>,
+        rhs_s: &Spanned<Expression<'a>>,
+    ) -> Result<Type, ()> {
+        let lhs_type = match &lhs_s.0 {
+            Expression::Variable(v_name) => self.lookup_variable(&(v_name, lhs_s.1.clone()))?,
+            Expression::StructFieldAccess { .. } => self.type_of_expr(lhs_s)?,
+            _ => {
+                self.add_error_with_labels(
+                    "Left-hand side of assignment must be an l-value (e.g., variable or field access)".to_string(),
+                    lhs_s.1.clone(),
+                    vec![
+                        (
+                            "This expression is not an l-value".to_string(),
+                            lhs_s.1.clone(),
+                        ),
+                        (
+                            "L-values can be variables or struct field accesses".to_string(),
+                            lhs_s.1.clone(),
+                        ),
+                    ],
+                );
+
+                return Err(());
+            }
+        };
+
+        let rhs_type = self.type_of_expr(rhs_s)?;
+        self.expect_type(
+            &(lhs_type.clone(), lhs_s.1.clone()),
+            &(rhs_type.clone(), rhs_s.1.clone()),
+        )?;
+
+        Ok(lhs_type)
+    }
+
+    fn type_of_struct_field_access<'a>(
+        &mut self,
+        struct_expr_s: &Spanned<Expression<'a>>,
+        field_name_s: &Spanned<&'a str>,
+    ) -> Result<Type, ()> {
+        let struct_expr_type_val = self.type_of_expr(struct_expr_s)?;
+        let (field_ident_str, field_ident_span) = field_name_s;
+
+        match struct_expr_type_val {
+            Type::Struct {
+                name: ref struct_definition_name,
+                ref fields,
+            } => {
+                if let Some(field_type) = fields.get(*field_ident_str) {
+                    Ok(field_type.clone())
+                } else {
+                    self.add_error_with_labels(
+                        format!("Field '{}' not found on struct '{}'", field_ident_str, struct_definition_name),
+                        field_ident_span.clone(),
+                        vec![
+                            (format!("Struct '{}' (type of this expression) does not have a field named '{}'", struct_definition_name, field_ident_str), struct_expr_s.1.clone()),
+                            (format!("No field named '{}' here", field_ident_str), field_ident_span.clone()),
+                        ],
+                    );
+                    Err(())
+                }
+            }
+            _ => {
+                self.add_error_with_labels(
+                    format!(
+                        "Cannot access field '{}' on non-struct type '{}'",
+                        field_ident_str, struct_expr_type_val
+                    ),
+                    struct_expr_s.1.clone(),
+                    vec![
+                        (
+                            format!(
+                                "Expected a struct type for field access, but found type '{}'",
+                                struct_expr_type_val
+                            ),
+                            struct_expr_s.1.clone(),
+                        ),
+                        (
+                            format!("Attempting to access field '{}'", field_ident_str),
+                            field_ident_span.clone(),
+                        ),
+                    ],
+                );
+                Err(())
             }
         }
     }

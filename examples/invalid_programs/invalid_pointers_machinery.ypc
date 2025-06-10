@@ -1,0 +1,9 @@
+func first_case() void {
+    var x = make(TYPE_int)
+    x = 10
+}
+
+func second_case() void {
+    var x = make(TYPE_int); // semicolon is important there
+    *x = "10"
+}

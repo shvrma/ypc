@@ -1,11 +1,8 @@
 func main() void {
     var S = 5
 
-    var arr = make_arr(TYPE_int, S)
+    var arr *int = make_arr(TYPE_int, S)
     for var i = 0; i < S; i = i + 1 {
-        // Language do not support expression deref
-        // 4 - size of int
-        var idx = arr + (TYPE_int.size * i)
-        *idx = 0
+        *(arr + (TYPE_int.size * i)) = 0
     }
 }

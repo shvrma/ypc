@@ -407,6 +407,11 @@ impl SemanticAnalyzer {
                                 self.func_env
                                     .insert(f_name.to_string(), (ret_type, param_types));
                             }
+                        } else {
+                            self.func_env.insert(
+                                f_name.to_string(),
+                                (Type::Primitive(PrimitiveType::Void), param_types),
+                            );
                         }
                     }
                 }
@@ -834,46 +839,108 @@ impl SemanticAnalyzer {
         let rhs_type = self.type_of_expr(rhs_s)?;
 
         match op {
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                match (&lhs_type, &rhs_type) {
-                    (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
-                        Ok(Type::Primitive(PrimitiveType::Int))
-                    }
-                    (
-                        Type::Primitive(PrimitiveType::Float),
-                        Type::Primitive(PrimitiveType::Float),
-                    ) => Ok(Type::Primitive(PrimitiveType::Float)),
-                    (
-                        Type::Primitive(PrimitiveType::Int),
-                        Type::Primitive(PrimitiveType::Float),
-                    ) => Ok(Type::Primitive(PrimitiveType::Float)),
-                    (
-                        Type::Primitive(PrimitiveType::Float),
-                        Type::Primitive(PrimitiveType::Int),
-                    ) => Ok(Type::Primitive(PrimitiveType::Float)),
-                    (
-                        Type::Primitive(PrimitiveType::Ptr(pt)),
-                        Type::Primitive(PrimitiveType::Int),
-                    ) if *op == BinOp::Add || *op == BinOp::Sub => {
-                        Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone())))
-                    }
-                    (
-                        Type::Primitive(PrimitiveType::Int),
-                        Type::Primitive(PrimitiveType::Ptr(pt)),
-                    ) if *op == BinOp::Add => Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone()))),
+            BinOp::Add => match (&lhs_type, &rhs_type) {
+                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
+                    Ok(Type::Primitive(PrimitiveType::Int))
+                }
+                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Float)) => {
+                    Ok(Type::Primitive(PrimitiveType::Float))
+                }
+                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Float)) => {
+                    Ok(Type::Primitive(PrimitiveType::Float))
+                }
+                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Int)) => {
+                    Ok(Type::Primitive(PrimitiveType::Float))
+                }
+                (Type::Primitive(PrimitiveType::Ptr(pt)), Type::Primitive(PrimitiveType::Int)) => {
+                    Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone())))
+                }
+                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Ptr(pt))) => {
+                    Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone())))
+                }
 
-                    _ => {
+                _ => {
+                    self.add_error(
+                        format!(
+                            "Operator '+' not supported for types '{}' and '{}'",
+                            lhs_type, rhs_type
+                        ),
+                        op_expr_span.clone(),
+                    );
+                    Err(())
+                }
+            },
+
+            BinOp::Sub => match (&lhs_type, &rhs_type) {
+                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
+                    Ok(Type::Primitive(PrimitiveType::Int))
+                }
+                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Float)) => {
+                    Ok(Type::Primitive(PrimitiveType::Float))
+                }
+                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Float)) => {
+                    Ok(Type::Primitive(PrimitiveType::Float))
+                }
+                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Int)) => {
+                    Ok(Type::Primitive(PrimitiveType::Float))
+                }
+                (Type::Primitive(PrimitiveType::Ptr(pt)), Type::Primitive(PrimitiveType::Int)) => {
+                    Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone())))
+                }
+                (
+                    Type::Primitive(PrimitiveType::Ptr(pt1)),
+                    Type::Primitive(PrimitiveType::Ptr(pt2)),
+                ) => {
+                    if pt1 == pt2 {
+                        Ok(Type::Primitive(PrimitiveType::Int))
+                    } else {
                         self.add_error(
                             format!(
-                                "Operator '{:?}' not supported for types '{}' and '{}'",
-                                op, lhs_type, rhs_type
+                                "Cannot subtract pointers of different types: '{}' and '{}'",
+                                lhs_type, rhs_type
                             ),
                             op_expr_span.clone(),
                         );
                         Err(())
                     }
                 }
-            }
+                _ => {
+                    self.add_error(
+                        format!(
+                            "Operator '-' not supported for types '{}' and '{}'",
+                            lhs_type, rhs_type
+                        ),
+                        op_expr_span.clone(),
+                    );
+                    Err(())
+                }
+            },
+
+            BinOp::Mul | BinOp::Div | BinOp::Mod => match (&lhs_type, &rhs_type) {
+                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
+                    Ok(Type::Primitive(PrimitiveType::Int))
+                }
+                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Float)) => {
+                    Ok(Type::Primitive(PrimitiveType::Float))
+                }
+                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Float)) => {
+                    Ok(Type::Primitive(PrimitiveType::Float))
+                }
+                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Int)) => {
+                    Ok(Type::Primitive(PrimitiveType::Float))
+                }
+                _ => {
+                    self.add_error(
+                        format!(
+                            "Operator '{:?}' not supported for types '{}' and '{}'",
+                            op, lhs_type, rhs_type
+                        ),
+                        op_expr_span.clone(),
+                    );
+                    Err(())
+                }
+            },
+
             BinOp::Eq | BinOp::Neq | BinOp::Lt | BinOp::Gt | BinOp::Leq | BinOp::Geq => {
                 match (&lhs_type, &rhs_type) {
                     (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int))
@@ -1109,9 +1176,32 @@ impl SemanticAnalyzer {
         let lhs_type = match &lhs_s.0 {
             Expression::Variable(v_name) => self.lookup_variable(&(v_name, lhs_s.1.clone()))?,
             Expression::StructFieldAccess { .. } => self.type_of_expr(lhs_s)?,
+            Expression::UnaryOp {
+                op: UnaryOp::Deref,
+                expr: inner_expr_s,
+            } => {
+                let pointer_type = self.type_of_expr(inner_expr_s.as_ref())?;
+
+                match pointer_type {
+                    Type::Primitive(PrimitiveType::Ptr(pointee_type)) => *pointee_type,
+                    _ => {
+                        self.add_error(
+                            format!(
+                                "Cannot assign to a dereferenced non-pointer type '{}'",
+                                pointer_type
+                            ),
+                            lhs_s.1.clone(),
+                        );
+                        return Err(());
+                    }
+                }
+            }
+
             _ => {
+                dbg!(&lhs_s.0);
+
                 self.add_error_with_labels(
-                    "Left-hand side of assignment must be an l-value (e.g., variable or field access)".to_string(),
+                    "Left-hand side of assignment must be an l-value (e.g., variable, field access, or pointer dereference)".to_string(),
                     lhs_s.1.clone(),
                     vec![
                         (
@@ -1119,22 +1209,21 @@ impl SemanticAnalyzer {
                             lhs_s.1.clone(),
                         ),
                         (
-                            "L-values can be variables or struct field accesses".to_string(),
+                            "L-values can be variables, struct field accesses, or dereferenced pointers".to_string(),
                             lhs_s.1.clone(),
                         ),
                     ],
                 );
-
                 return Err(());
             }
         };
 
         let rhs_type = self.type_of_expr(rhs_s)?;
+
         self.expect_type(
             &(lhs_type.clone(), lhs_s.1.clone()),
             &(rhs_type.clone(), rhs_s.1.clone()),
         )?;
-
         Ok(lhs_type)
     }
 

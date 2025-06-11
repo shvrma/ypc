@@ -1,6 +1,6 @@
 [package]
 name = "ypc"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Oleksandr Piskovyi <shvrma228@gmail.com> <piskovyi1@uniba.sk>"]
 edition = "2024"
 license = "GPL-3.0-or-later"

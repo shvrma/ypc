@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display};
+use std::{collections::HashMap, fmt::Display, hash::Hash};
 
 use crate::parser::{BinOp, Block, Expression, Item, SpanT, Spanned, Statement, TypeName, UnaryOp};
 
@@ -97,50 +97,53 @@ pub struct SemanticAnalyzer {
 
 impl SemanticAnalyzer {
     fn new() -> Self {
-        let mut runtime_type_fields = HashMap::new();
-        runtime_type_fields.insert(
-            "name".to_string(),
-            Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
-                PrimitiveType::Char,
-            )))),
-        );
-        runtime_type_fields.insert("size".to_string(), Type::Primitive(PrimitiveType::Int));
         let runtime_type_struct_definition = Type::Struct {
             name: "Type".to_string(),
-            fields: runtime_type_fields,
+            fields: HashMap::from([
+                (
+                    "name".to_string(),
+                    Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
+                        PrimitiveType::Char,
+                    )))),
+                ),
+                ("size".to_string(), Type::Primitive(PrimitiveType::Int)),
+            ]),
         };
 
-        let mut type_env = TypeEnv::new();
-        type_env.insert("int".to_string(), PrimitiveType::Int.into());
-        type_env.insert("float".to_string(), PrimitiveType::Float.into());
-        type_env.insert("char".to_string(), PrimitiveType::Char.into());
-        type_env.insert("void".to_string(), PrimitiveType::Void.into());
-        type_env.insert("schar".to_string(), PrimitiveType::SignedChar.into());
-        type_env.insert("sshort".to_string(), PrimitiveType::SignedShort.into());
-        type_env.insert("sint".to_string(), PrimitiveType::SignedInt.into());
-        type_env.insert("Type".to_string(), runtime_type_struct_definition.clone());
+        let type_env = HashMap::from([
+            ("int".to_string(), PrimitiveType::Int.into()),
+            ("float".to_string(), PrimitiveType::Float.into()),
+            ("char".to_string(), PrimitiveType::Char.into()),
+            ("void".to_string(), PrimitiveType::Void.into()),
+            ("schar".to_string(), PrimitiveType::SignedChar.into()),
+            ("sshort".to_string(), PrimitiveType::SignedShort.into()),
+            ("sint".to_string(), PrimitiveType::SignedInt.into()),
+            ("Type".to_string(), runtime_type_struct_definition.clone()),
+        ]);
 
-        let mut func_env = FuncEnv::new();
-        func_env.insert(
-            "print".to_string(),
+        let func_env = HashMap::from([
             (
-                PrimitiveType::Void.into(),
-                vec![PrimitiveType::Ptr(Box::new(PrimitiveType::Char.into())).into()],
+                "print".to_string(),
+                (
+                    PrimitiveType::Void.into(),
+                    vec![PrimitiveType::Ptr(Box::new(PrimitiveType::Char.into())).into()],
+                ),
             ),
-        );
-        func_env.insert(
-            "make".to_string(),
             (
-                Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
-                    PrimitiveType::Void, // Returns *void
-                )))),
-                vec![Type::Primitive(PrimitiveType::Int)], // Accepts int
+                "make".to_string(),
+                (
+                    Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
+                        PrimitiveType::Void, // Returns *void
+                    )))),
+                    vec![Type::Primitive(PrimitiveType::Int)], // Accepts int
+                ),
             ),
-        );
+        ]);
 
-        let mut global_vars = VarEnv::new();
-        global_vars.insert("true".to_string(), PrimitiveType::Char.into());
-        global_vars.insert("false".to_string(), PrimitiveType::Char.into());
+        let mut global_vars = HashMap::from([
+            ("true".to_string(), PrimitiveType::Char.into()),
+            ("false".to_string(), PrimitiveType::Char.into()),
+        ]);
 
         let primitive_types_for_consts =
             vec!["int", "float", "char", "void", "schar", "sshort", "sint"];
@@ -181,30 +184,25 @@ impl SemanticAnalyzer {
         self.var_env_stack.pop();
     }
 
-    fn add_error(&mut self, message: String, span: impl Into<SpanT>) {
-        let owned_span = span.into();
+    fn add_error(&mut self, message: String, span: SpanT) {
         self.errors.push(ErrT {
-            message: message.clone(),
-            span: owned_span.clone(),
+            message,
+            span,
             labels: vec![],
         });
     }
 
-    fn add_error_with_labels(
-        &mut self,
-        message: String,
-        span: impl Into<SpanT>,
-        labels: Vec<ErrLabel>,
-    ) {
+    fn add_error_with_labels(&mut self, message: String, span: SpanT, labels: Vec<ErrLabel>) {
         self.errors.push(ErrT {
             message,
-            span: span.into(),
-            labels: labels,
+            span,
+            labels,
         });
     }
 
     fn lookup_variable<'a>(&mut self, name: &Spanned<&'a str>) -> Result<Type, ()> {
         let (name, span) = name;
+
         for scope in self.var_env_stack.iter().rev() {
             if let Some(ty) = scope.get(*name) {
                 return Ok(ty.clone());
@@ -221,6 +219,7 @@ impl SemanticAnalyzer {
         type_name_node: &Spanned<TypeName<'a>>,
     ) -> Result<Type, ()> {
         let (type_name_data, type_span) = type_name_node;
+
         match type_name_data {
             TypeName::Named(name_str) => match self.type_env.get(*name_str) {
                 Some(ty) => Ok(ty.clone()),
@@ -260,7 +259,7 @@ impl SemanticAnalyzer {
             return Ok(());
         }
 
-        if let Type::Primitive(PrimitiveType::Ptr(_ /* expected_pointee_type */)) = expected_ty {
+        if let Type::Primitive(PrimitiveType::Ptr(_)) = expected_ty {
             if *found_ty
                 == Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
                     PrimitiveType::Void,
@@ -284,6 +283,7 @@ impl SemanticAnalyzer {
                 (format!("Found type '{}'", found_ty), found_span.clone()),
             ],
         );
+
         Err(())
     }
 
@@ -302,24 +302,27 @@ impl SemanticAnalyzer {
         for (item_spanned, _i_span) in items.iter().map(|s| (&s.0, s.1.clone())) {
             match item_spanned {
                 Item::StructDecl {
-                    name: struct_name_spanned,
+                    name: s_name,
                     fields,
                 } => {
-                    let (s_name, s_name_s) = struct_name_spanned; // s_name is the original case, e.g., "User"
+                    let (s_name, s_name_s) = s_name;
 
                     if self.type_env.contains_key(*s_name) {
                         self.add_error(
                             format!("Struct '{}' already defined", s_name),
                             s_name_s.to_owned(),
                         );
+
                         continue;
                     }
 
                     let mut fields_map = HashMap::new();
-                    let mut field_resolution_ok = true;
-                    for field_node_spanned in fields {
-                        let (((f_name, f_name_s), f_type_node_s), _) = field_node_spanned;
-                        if fields_map.contains_key(*f_name) {
+                    for (((f_name, f_name_s), f_type_node_s), _) in fields {
+                        let Ok(ty) = self.resolve_type_node(&f_type_node_s) else {
+                            continue;
+                        };
+
+                        let None = fields_map.insert(f_name.to_string(), ty) else {
                             self.add_error_with_labels(
                                 format!(
                                     "Field '{}' already defined in struct '{}'",
@@ -328,48 +331,35 @@ impl SemanticAnalyzer {
                                 f_name_s.clone(),
                                 vec![(format!("Field '{}' redefined", f_name), f_name_s.clone())],
                             );
-                            field_resolution_ok = false;
-                            break;
-                        }
-                        if let Ok(ty) = self.resolve_type_node(&f_type_node_s) {
-                            fields_map.insert(f_name.to_string(), ty);
-                        } else {
-                            field_resolution_ok = false;
-                            break;
-                        }
+
+                            continue;
+                        };
                     }
 
-                    if field_resolution_ok && fields_map.len() == fields.len() {
-                        let user_struct_definition = Type::Struct {
-                            name: s_name.to_string(),
-                            fields: fields_map,
-                        };
-                        self.type_env
-                            .insert(s_name.to_string(), user_struct_definition);
+                    let user_struct_definition = Type::Struct {
+                        name: s_name.to_string(),
+                        fields: fields_map,
+                    };
+                    self.type_env
+                        .insert(s_name.to_string(), user_struct_definition);
 
-                        // Use original struct name casing for the TYPE_ constant
-                        // e.g., struct User -> TYPE_User
-                        let type_const_name = format!("TYPE_{}", s_name);
+                    let Some(global_scope) = self.var_env_stack.first_mut() else {
+                        self.add_error(
+                            "Internal error: Global scope not found for type constant.".to_string(),
+                            s_name_s.to_owned(),
+                        );
 
-                        if let Some(global_scope) = self.var_env_stack.first_mut() {
-                            if global_scope.contains_key(&type_const_name) {
-                                self.add_error(
+                        continue;
+                    };
+                    let type_const_name = format!("TYPE_{}", s_name);
+                    if global_scope.contains_key(&type_const_name) {
+                        self.add_error(
                                     format!("Type constant '{}' would conflict with an existing global variable.", type_const_name),
                                     s_name_s.to_owned(),
                                 );
-                            } else {
-                                global_scope.insert(
-                                    type_const_name,
-                                    self.runtime_type_struct_definition.clone(),
-                                );
-                            }
-                        } else {
-                            self.add_error(
-                                "Internal error: Global scope not found for type constant."
-                                    .to_string(),
-                                s_name_s.to_owned(),
-                            );
-                        }
+                    } else {
+                        global_scope
+                            .insert(type_const_name, self.runtime_type_struct_definition.clone());
                     }
                 }
 
@@ -390,16 +380,14 @@ impl SemanticAnalyzer {
                         continue;
                     }
 
-                    let param_types =
-                        params
-                            .iter()
-                            .filter_map(|((_p_name_s, p_type_node_s), _param_overall_span)| {
-                                match self.resolve_type_node(p_type_node_s) {
-                                    Ok(ty) => Some(ty),
-                                    Err(_) => None,
-                                }
-                            })
-                            .collect::<Vec<_>>();
+                    let param_types = Vec::from_iter(params.iter().filter_map(
+                        |((_p_name_s, p_type_node_s), _param_overall_span)| {
+                            match self.resolve_type_node(p_type_node_s) {
+                                Ok(ty) => Some(ty),
+                                Err(_) => None,
+                            }
+                        },
+                    ));
 
                     if param_types.len() == params.len() {
                         if let Some(ret_type) = ret_type {
@@ -430,18 +418,22 @@ impl SemanticAnalyzer {
                 } => {
                     let _ = self.analyze_const_decl(name, type_name.as_ref(), init_expr);
                 }
+
                 Item::FuncDecl {
                     name,
                     params,
                     ret_type: _ret_type,
                     body,
                 } => {
-                    let extracted_params = params
-                        .iter()
-                        .map(|param_decl_spanned| &param_decl_spanned.0)
-                        .collect::<Vec<_>>();
+                    let extracted_params = Vec::from_iter(
+                        params
+                            .iter()
+                            .map(|param_decl_spanned| &param_decl_spanned.0),
+                    );
+
                     let _ = self.analyze_func_decl(name, &extracted_params, body);
                 }
+
                 Item::StructDecl { .. } => {}
             };
         }
@@ -475,11 +467,13 @@ impl SemanticAnalyzer {
                 format!("Constant '{}' already defined", name.0),
                 name.1.clone(),
             );
+
             return Err(());
         }
 
         let global_scope = match self.var_env_stack.first_mut() {
             Some(scope) => scope,
+
             None => {
                 self.add_error(
                     "Internal error: Global scope not found".to_string(),
@@ -504,6 +498,7 @@ impl SemanticAnalyzer {
 
         let (expected_return_type, param_sig_types) = match self.func_env.get(*name).cloned() {
             Some(data) => data,
+
             None => {
                 self.add_error(
                     format!(
@@ -535,21 +530,25 @@ impl SemanticAnalyzer {
         Ok(())
     }
 
-    fn analyze_block<'a>(&mut self, block_spanned: &Spanned<Block<'a>>) {
-        let (block_data, _block_span) = block_spanned;
+    fn analyze_block<'a>(&mut self, block: &Spanned<Block<'a>>) {
+        let (block, _) = block;
+
         self.enter_scope();
-        for stmt_spanned in &block_data.0 {
+
+        for stmt_spanned in &block.0 {
             let _ = self.analyze_stmt(stmt_spanned);
         }
+
         self.leave_scope();
     }
 
-    fn analyze_stmt<'a>(&mut self, stmt_spanned: &Spanned<Statement<'a>>) -> Result<(), ()> {
-        let (stmt, s_span) = stmt_spanned;
+    fn analyze_stmt<'a>(&mut self, stmt: &Spanned<Statement<'a>>) -> Result<(), ()> {
+        let (stmt, s_span) = stmt;
 
         match stmt {
-            Statement::ExpressionStatement(expr_s) => {
-                self.type_of_expr(expr_s)?;
+            Statement::ExpressionStatement(expr) => {
+                self.type_of_expr(expr)?;
+
                 Ok(())
             }
 
@@ -588,6 +587,7 @@ impl SemanticAnalyzer {
                     .last_mut()
                     .unwrap()
                     .insert(name.0.to_string(), var_type);
+
                 Ok(())
             }
 
@@ -635,11 +635,13 @@ impl SemanticAnalyzer {
             Statement::ReturnStatement(opt_expr_s) => {
                 let current_ret_type = match self.current_function_return_type.clone() {
                     Some(t) => t,
+
                     None => {
                         self.add_error(
                             "Return statement outside of a function".to_string(),
                             s_span.clone(),
                         );
+
                         return Err(());
                     }
                 };
@@ -791,6 +793,7 @@ impl SemanticAnalyzer {
                         Type::Primitive(PrimitiveType::Int) => {
                             Ok(Type::Primitive(PrimitiveType::Int))
                         }
+
                         Type::Primitive(PrimitiveType::Float) => {
                             Ok(Type::Primitive(PrimitiveType::Float))
                         }
@@ -843,19 +846,15 @@ impl SemanticAnalyzer {
                 (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
                     Ok(Type::Primitive(PrimitiveType::Int))
                 }
-                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Float)) => {
+
+                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Float))
+                | (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Float))
+                | (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Int)) => {
                     Ok(Type::Primitive(PrimitiveType::Float))
                 }
-                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Float)) => {
-                    Ok(Type::Primitive(PrimitiveType::Float))
-                }
-                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Int)) => {
-                    Ok(Type::Primitive(PrimitiveType::Float))
-                }
-                (Type::Primitive(PrimitiveType::Ptr(pt)), Type::Primitive(PrimitiveType::Int)) => {
-                    Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone())))
-                }
-                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Ptr(pt))) => {
+
+                (Type::Primitive(PrimitiveType::Ptr(pt)), Type::Primitive(PrimitiveType::Int))
+                | (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Ptr(pt))) => {
                     Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone())))
                 }
 
@@ -867,6 +866,7 @@ impl SemanticAnalyzer {
                         ),
                         op_expr_span.clone(),
                     );
+
                     Err(())
                 }
             },
@@ -875,18 +875,17 @@ impl SemanticAnalyzer {
                 (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
                     Ok(Type::Primitive(PrimitiveType::Int))
                 }
-                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Float)) => {
+
+                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Float))
+                | (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Float))
+                | (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Int)) => {
                     Ok(Type::Primitive(PrimitiveType::Float))
                 }
-                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Float)) => {
-                    Ok(Type::Primitive(PrimitiveType::Float))
-                }
-                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Int)) => {
-                    Ok(Type::Primitive(PrimitiveType::Float))
-                }
+
                 (Type::Primitive(PrimitiveType::Ptr(pt)), Type::Primitive(PrimitiveType::Int)) => {
                     Ok(Type::Primitive(PrimitiveType::Ptr(pt.clone())))
                 }
+
                 (
                     Type::Primitive(PrimitiveType::Ptr(pt1)),
                     Type::Primitive(PrimitiveType::Ptr(pt2)),
@@ -901,9 +900,11 @@ impl SemanticAnalyzer {
                             ),
                             op_expr_span.clone(),
                         );
+
                         Err(())
                     }
                 }
+
                 _ => {
                     self.add_error(
                         format!(
@@ -912,6 +913,7 @@ impl SemanticAnalyzer {
                         ),
                         op_expr_span.clone(),
                     );
+
                     Err(())
                 }
             },
@@ -920,15 +922,13 @@ impl SemanticAnalyzer {
                 (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
                     Ok(Type::Primitive(PrimitiveType::Int))
                 }
-                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Float)) => {
+
+                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Float))
+                | (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Float))
+                | (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Int)) => {
                     Ok(Type::Primitive(PrimitiveType::Float))
                 }
-                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Float)) => {
-                    Ok(Type::Primitive(PrimitiveType::Float))
-                }
-                (Type::Primitive(PrimitiveType::Float), Type::Primitive(PrimitiveType::Int)) => {
-                    Ok(Type::Primitive(PrimitiveType::Float))
-                }
+
                 _ => {
                     self.add_error(
                         format!(
@@ -937,6 +937,7 @@ impl SemanticAnalyzer {
                         ),
                         op_expr_span.clone(),
                     );
+
                     Err(())
                 }
             },
@@ -956,6 +957,7 @@ impl SemanticAnalyzer {
                         Type::Primitive(PrimitiveType::Ptr(_)),
                         Type::Primitive(PrimitiveType::Ptr(_)),
                     ) => Ok(Type::Primitive(PrimitiveType::Char)),
+
                     (
                         Type::Primitive(PrimitiveType::Int),
                         Type::Primitive(PrimitiveType::Float),
@@ -973,6 +975,7 @@ impl SemanticAnalyzer {
                             ),
                             op_expr_span.clone(),
                         );
+
                         Err(())
                     }
                 }
@@ -981,6 +984,7 @@ impl SemanticAnalyzer {
             BinOp::And | BinOp::Or => {
                 self.expect_boolean_condition(&lhs_type, lhs_s.1.clone())?;
                 self.expect_boolean_condition(&rhs_type, rhs_s.1.clone())?;
+
                 Ok(Type::Primitive(PrimitiveType::Char))
             }
 
@@ -989,6 +993,7 @@ impl SemanticAnalyzer {
                     format!("Unsupported binary operator '{:?}'", op),
                     op_expr_span.clone(),
                 );
+
                 Err(())
             }
         }
@@ -1013,6 +1018,7 @@ impl SemanticAnalyzer {
                     ),
                     call_expr_span.clone(),
                 );
+
                 return Err(());
             }
 
@@ -1042,7 +1048,9 @@ impl SemanticAnalyzer {
     ) -> Result<Type, ()> {
         let lhs_type = match &lhs_s.0 {
             Expression::Variable(v_name) => self.lookup_variable(&(v_name, lhs_s.1.clone()))?,
+
             Expression::StructFieldAccess { .. } => self.type_of_expr(lhs_s)?,
+
             Expression::UnaryOp {
                 op: UnaryOp::Deref,
                 expr: inner_expr_s,
@@ -1059,14 +1067,13 @@ impl SemanticAnalyzer {
                             ),
                             lhs_s.1.clone(),
                         );
+
                         return Err(());
                     }
                 }
             }
 
             _ => {
-                dbg!(&lhs_s.0);
-
                 self.add_error_with_labels(
                     "Left-hand side of assignment must be an l-value (e.g., variable, field access, or pointer dereference)".to_string(),
                     lhs_s.1.clone(),
@@ -1091,6 +1098,7 @@ impl SemanticAnalyzer {
             &(lhs_type.clone(), lhs_s.1.clone()),
             &(rhs_type.clone(), rhs_s.1.clone()),
         )?;
+
         Ok(lhs_type)
     }
 
@@ -1118,9 +1126,11 @@ impl SemanticAnalyzer {
                             (format!("No field named '{}' here", field_ident_str), field_ident_span.clone()),
                         ],
                     );
+
                     Err(())
                 }
             }
+
             _ => {
                 self.add_error_with_labels(
                     format!(
@@ -1142,6 +1152,7 @@ impl SemanticAnalyzer {
                         ),
                     ],
                 );
+                
                 Err(())
             }
         }

@@ -1,0 +1,2 @@
+func print_int(a int) void { }
+func main() void { print_int("hello"); }

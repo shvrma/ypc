@@ -1,0 +1,6 @@
+struct Point { x int y int }
+
+func main() void { 
+    var p *Point = make(TYPE_Point.size);
+    var z = (*p).z;
+}

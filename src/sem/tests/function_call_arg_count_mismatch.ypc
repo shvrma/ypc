@@ -1,0 +1,2 @@
+func add(a int, b int) int { return a + b; }
+func main() void { var x = add(1); }

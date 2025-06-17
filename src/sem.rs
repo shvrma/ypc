@@ -1,4 +1,4 @@
-use std::{collections::HashMap, fmt::Display, hash::Hash};
+use std::{collections::HashMap, fmt::Display};
 
 use crate::parser::{BinOp, Block, Expression, Item, SpanT, Spanned, Statement, TypeName, UnaryOp};
 
@@ -1152,7 +1152,7 @@ impl SemanticAnalyzer {
                         ),
                     ],
                 );
-                
+
                 Err(())
             }
         }

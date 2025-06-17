@@ -2,7 +2,7 @@
 
 Currently, a standalone compiler frontend.
 
-See the *examples* folder for examples of both valid and invalid programs in this project's language.
+See the *src/sem/tests/* folder for examples of both valid and invalid programs in this project's language.
 
 ## Currently recognizable grammar
 
@@ -81,8 +81,3 @@ primary_expr ::= IntConstant
 func_call ::= Identifier "(" [ expression { "," expression } ] ")"
 
 ```
-
-## Further work
-
-1. Refactor *sem.rs*
-2. Resolve all TODO's in the code

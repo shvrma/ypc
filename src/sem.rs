@@ -5,11 +5,15 @@ use crate::parser::{Item, SpanT, Spanned, TypeName};
 mod analyze;
 mod types;
 
+/// Map of variable bindings for a single lexical scope.
 pub type VarEnv = HashMap<String, Type>;
+/// Registry of known type names (built-ins and structs) to their semantic representation.
 pub type TypeEnv = HashMap<String, Type>;
+/// Function signature table mapping name to (return type, parameter types).
 pub type FuncEnv = HashMap<String, (Type, Vec<Type>)>;
 
 #[derive(Debug, Clone, PartialEq)]
+/// High-level type representation used during semantic analysis.
 pub enum Type {
     Primitive(PrimitiveType),
     Struct {
@@ -31,6 +35,7 @@ impl Display for Type {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+/// Primitive language atoms plus pointers.
 pub enum PrimitiveType {
     SignedChar,
     Char,
@@ -78,15 +83,18 @@ impl From<PrimitiveType> for Box<Type> {
     }
 }
 
+/// Additional labels attached to an error (message + span).
 pub type ErrLabel = (String, SpanT);
 
 #[derive(Debug)]
+/// Error produced by the analyzer.
 pub struct ErrT {
     pub message: String,
     pub span: SpanT,
     pub labels: Vec<ErrLabel>,
 }
 
+/// Stateful semantic analyzer that walks the parsed AST and enforces language rules.
 pub struct SemanticAnalyzer {
     type_env: TypeEnv,
     func_env: FuncEnv,
@@ -173,6 +181,7 @@ impl SemanticAnalyzer {
         }
     }
 
+    /// Entry point that runs the semantic pipeline over all parsed items and returns accumulated errors.
     pub fn analyze<'a>(items: &'a [Spanned<Item<'a>>]) -> Vec<ErrT> {
         let mut analyzer = SemanticAnalyzer::new();
 
@@ -185,6 +194,7 @@ impl SemanticAnalyzer {
         analyzer.errors
     }
 
+    /// Pushes a new lexical scope on the variable environment stack.
     fn enter_scope(&mut self) {
         self.var_env_stack.push(HashMap::new());
     }
@@ -254,6 +264,7 @@ impl SemanticAnalyzer {
         }
     }
 
+    /// Ensures the found type matches the expected type, allowing for implicit float<-int and void*-style conversions.
     fn expect_type(&mut self, expected: &Spanned<Type>, found: &Spanned<Type>) -> Result<(), ()> {
         let (expected_ty, expected_span) = expected;
         let (found_ty, found_span) = found;
@@ -296,6 +307,7 @@ impl SemanticAnalyzer {
         Err(())
     }
 
+    /// Validates that a condition expression is boolean-like (char/int in this language).
     fn expect_boolean_condition(&mut self, ty: &Type, span: SpanT) -> Result<(), ()> {
         match ty {
             Type::Primitive(PrimitiveType::Char) | Type::Primitive(PrimitiveType::Int) => Ok(()),
@@ -307,6 +319,7 @@ impl SemanticAnalyzer {
         }
     }
 
+    /// Registers all top-level struct and function declarations before analyzing their bodies.
     fn populate_declarations<'a>(&mut self, items: &'a [Spanned<Item<'a>>]) {
         for (item_spanned, _i_span) in items.iter().map(|s| (&s.0, s.1.clone())) {
             match item_spanned {

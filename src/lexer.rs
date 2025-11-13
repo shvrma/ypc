@@ -7,6 +7,7 @@ use ariadne::{Color, Fmt};
 use logos::{Lexer, Logos};
 
 #[derive(Default, Debug, Clone, PartialEq)]
+/// Error type of a lexer for malformed input.
 pub enum LexingError {
     InvalidInteger(String),
     InvalidFloat(String),
@@ -29,6 +30,8 @@ impl From<ParseFloatError> for LexingError {
     }
 }
 
+/// Converts the characters between the surrounding quotes of a string literal token
+/// into their runtime form, handling escapes like `\n`, `\t`, and `\"`.
 fn handle_escape_sequences<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Result<String, LexingError> {
     let s = lex.slice();
     let s = s[1..s.len() - 1].to_string();
@@ -66,6 +69,7 @@ fn handle_escape_sequences<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Result<String,
 #[logos(skip r"[[:space:]]*")]
 #[logos(skip r"//[^\n]*\n")]
 #[logos(error = LexingError)]
+/// Token kinds that make up the surface syntax of the language.
 pub enum Token<'a> {
     MalformedToken(LexingError),
 

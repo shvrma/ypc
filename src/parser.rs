@@ -1,3 +1,5 @@
+//! Pratt-style parser built with `chumsky` that turns tokens into the compiler AST.
+
 mod expr;
 pub use expr::{BinOp, Expression, UnaryOp};
 
@@ -22,18 +24,24 @@ use chumsky::{
 };
 use logos::Logos;
 
+/// Byte-range span pointing into the original source.
 pub type SpanT = std::ops::Range<usize>;
+/// Utility tuple pairing parsed nodes with their source span.
 pub type Spanned<T> = (T, SpanT);
 
 #[derive(Debug, PartialEq)]
+/// AST node used wherever a type name appears syntactically (including pointer chains).
 pub enum TypeName<'a> {
     Named(&'a str),
     Ptr(Box<Spanned<TypeName<'a>>>),
 }
 
+/// Parser error reported by chumsky (`Rich`) specialized for ypc tokens.
 type ErrT<'a> = Rich<'a, Token<'a>, SpanT>;
+/// Extra state carried through parser combinators (just the error accumulator here).
 type ExtraT<'a> = extra::Err<ErrT<'a>>;
 
+/// Tokenizes the input and adapts it into a `chumsky` stream with span bookkeeping.
 fn into_parser_input<'a>(input: &'a str) -> impl ValueInput<'a, Token = Token<'a>, Span = SpanT> {
     let token_iter = Token::lexer(input).spanned().map(|(tok, span)| match tok {
         Ok(tok) => (tok, span),
@@ -43,12 +51,14 @@ fn into_parser_input<'a>(input: &'a str) -> impl ValueInput<'a, Token = Token<'a
     Stream::from_iter(token_iter).map(input.len()..input.len(), |(t, s)| (t, s))
 }
 
+/// Parses a full source file into a list of items (functions, structs, etc.).
 pub fn parse<'a>(input: &'a str) -> ParseResult<Vec<Spanned<Item<'a>>>, ErrT<'a>> {
     let parser_input = into_parser_input(input);
 
     items().parse(parser_input)
 }
 
+/// Parser for identifiers that also returns the source span.
 fn ident<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
 -> impl Parser<'a, I, Spanned<&'a str>, ExtraT<'a>> + Clone {
     select! {
@@ -56,6 +66,7 @@ fn ident<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
     }
 }
 
+/// Recursive parser for named types and pointer types (e.g. `**int`).
 fn type_name<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
 -> impl Parser<'a, I, Spanned<TypeName<'a>>, ExtraT<'a>> + Clone {
     recursive(|type_name| {

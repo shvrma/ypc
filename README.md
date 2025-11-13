@@ -1,4 +1,4 @@
-# ypc (Yet Another Programming Compiler)
+# ypc
 
 [![Rust](https://github.com/shvrma/ypc/actions/workflows/rust.yml/badge.svg)](https://github.com/shvrma/ypc/actions/workflows/rust.yml)
 
@@ -10,6 +10,14 @@ It implements:
 - Parsing: featuring a Pratt parser for expressions.
 - Semantic Analysis: Full type checking, scope management, and error validation.
 - Beautiful Error Reporting: Generates user-friendly, *rustc*-style error messages.
+
+## Project Layout
+
+- `src/main.rs` – CLI entrypoint that wires together the pipeline and handles file loading / diagnostics.
+- `src/lexer.rs` – Logos-based tokenizer that turns raw source into a token stream.
+- `src/parser.rs` & `src/parser/` – Pratt expression parser plus statement / item parsing helpers.
+- `src/sem.rs` & `src/sem/` – Semantic analysis passes, type system definitions, and targeted regression tests.
+- `src/sem/tests/*.ypc` – Example programs that double as fixtures for semantic tests and manual experimentation.
 
 ## Literature used
 
@@ -38,6 +46,16 @@ cargo build
 # Run the compiler on an example file
 cargo run -- src/sem/tests/hello_world.ypc
 ```
+
+## Testing & Validation
+
+The repository includes fast regression suites to keep the language semantics honest:
+
+- `cargo test` – runs all Rust unit tests plus the semantic analyzer fixtures under `src/sem/tests.rs`.
+- `cargo test sem::tests` – focuses on the semantic analyzer harness if you're iterating on the type checker.
+- `cargo run -- <path>` – quickly exercises a specific `.ypc` program; try the samples in `src/sem/tests/`.
+
+When adding new language features, drop a representative `.ypc` program into `src/sem/tests/` and reference it from `src/sem/tests.rs` to guard against regressions.
 
 ## Language Overview & Examples
 

@@ -1,13 +1,94 @@
-# ypc
+# ypc (Yet Another Programming Compiler)
 
-Currently, a standalone compiler frontend.
+[![Rust](https://github.com/shvrma/ypc/actions/workflows/rust.yml/badge.svg)](https://github.com/shvrma/ypc/actions/workflows/rust.yml)
 
-See the *src/sem/tests/* folder for examples of both valid and invalid programs in this project's language.
+ypc is a standalone compiler frontend for an experimental, C-like toy programming language. This project is a deep dive into compiler theory and practice, built entirely in Rust.
 
-## Currently recognizable grammar
+It implements:
 
-```ebnf
+- Lexical Analysis.
+- Parsing: featuring a Pratt parser for expressions.
+- Semantic Analysis: Full type checking, scope management, and error validation.
+- Beautiful Error Reporting: Generates user-friendly, *rustc*-style error messages.
 
+## Literature used
+
+- [Modern Compiler Implementation in C](https://www.amazon.com/Modern-Compiler-Implement-Andrew-Appel/dp/0521607655)
+
+## Development Environment (Nix)
+
+This repository is fully configured for a reproducible development environment using Nix. Simply enter the shell to get started:
+
+```sh
+# If you have direnv installed (recommended)
+direnv allow
+
+# Or, to enter the shell manually
+nix-shell
+```
+
+## How to Build & Run
+
+Once inside the Nix shell:
+
+```sh
+# Build the project
+cargo build
+
+# Run the compiler on an example file
+cargo run -- src/sem/tests/hello_world.ypc
+```
+
+## Language Overview & Examples
+
+The language is C-like, with functions, variables, pointers, structs, and a familiar syntax.
+
+### Hello, World
+
+```c
+// See: src/sem/tests/hello_world.ypc
+func main() void {
+    print("Hello, world!\n")
+    print("Have fun :)")
+}
+```
+
+### Factorial calculation via recursion
+
+```c
+// See: src/sem/tests/factorial.ypc
+func fact(n int) int {
+    if n == 0 {
+        return 1
+    }
+
+    return n * fact(n - 1)
+}
+```
+
+### Structs showcase
+
+```c
+// See: src/sem/tests/structs_magic.ypc
+struct User {
+    id *char
+    name *char
+    age int
+}
+
+func main() void {
+    var me *User = make(TYPE_User.size)
+
+    (*me).id = "unique"
+    (*me).name = "Imaginary Name"
+    (*me).age = 19
+}
+
+```
+
+### Language Grammar (EBNF)
+
+```enf
 program ::= { item } EOF
 
 type_name = Identifier | "*" type_name
@@ -79,5 +160,4 @@ primary_expr ::= IntConstant
                | expression "." Identifier
 
 func_call ::= Identifier "(" [ expression { "," expression } ] ")"
-
 ```

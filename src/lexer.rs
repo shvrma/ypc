@@ -209,7 +209,7 @@ impl<'a> Display for Token<'a> {
 mod tests {
     use super::*;
 
-    fn lex_input(input: &str) -> Vec<Token> {
+    fn lex_input(input: &str) -> Vec<Token<'_>> {
         Token::lexer(input)
             .map(|res| {
                 res.unwrap_or_else(|e| panic!("Lexing failed for input '{}': {:?}", input, e))

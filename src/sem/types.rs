@@ -3,6 +3,11 @@ use crate::{
     sem::{PrimitiveType, SemanticAnalyzer, Type},
 };
 
+enum LValueError {
+    NotLValue,
+    Reported,
+}
+
 impl SemanticAnalyzer {
     pub fn type_of_expr<'a>(&mut self, expr_spanned: &Spanned<Expression<'a>>) -> Result<Type, ()> {
         let (expr, expr_span) = expr_spanned;
@@ -27,7 +32,7 @@ impl SemanticAnalyzer {
 
             Expression::FuncCall { func, args } => self.type_of_func_call(func, args, expr_span),
 
-            Expression::ParenthisedExpr(inner_expr_s) => self.type_of_expr(inner_expr_s),
+            Expression::Parenthesized(inner_expr_s) => self.type_of_expr(inner_expr_s),
 
             Expression::Assignment { lhs, rhs } => self.type_of_assignment(lhs, rhs),
 
@@ -38,6 +43,42 @@ impl SemanticAnalyzer {
         }
     }
 
+    fn lvalue_type<'a>(
+        &mut self,
+        expr_spanned: &Spanned<Expression<'a>>,
+    ) -> Result<Type, LValueError> {
+        match &expr_spanned.0 {
+            Expression::Variable(name) => self
+                .lookup_variable(&(name, expr_spanned.1.clone()))
+                .map_err(|_| LValueError::Reported),
+            Expression::StructFieldAccess { .. } => self
+                .type_of_expr(expr_spanned)
+                .map_err(|_| LValueError::Reported),
+            Expression::UnaryOp {
+                op: UnaryOp::Deref,
+                expr: inner_expr,
+            } => {
+                let pointer_type = self
+                    .type_of_expr(inner_expr.as_ref())
+                    .map_err(|_| LValueError::Reported)?;
+
+                match pointer_type {
+                    Type::Primitive(PrimitiveType::Ptr(pointee_type)) => Ok(*pointee_type),
+                    _ => {
+                        self.add_error(
+                            format!("Cannot dereference non-pointer type '{}'", pointer_type),
+                            expr_spanned.1.clone(),
+                        );
+
+                        Err(LValueError::Reported)
+                    }
+                }
+            }
+            Expression::Parenthesized(inner_expr) => self.lvalue_type(inner_expr),
+            _ => Err(LValueError::NotLValue),
+        }
+    }
+
     fn type_of_unary_op<'a>(
         &mut self,
         op: &UnaryOp,
@@ -45,27 +86,20 @@ impl SemanticAnalyzer {
         op_expr_span: &SpanT,
     ) -> Result<Type, ()> {
         match op {
-            UnaryOp::AddressOf => {
-                let lvalue_type = match &inner_expr_s.0 {
-                    Expression::Variable(var_name) => {
-                        self.lookup_variable(&(var_name, inner_expr_s.1.clone()))?
-                    }
-
-                    Expression::StructFieldAccess { .. } => self.type_of_expr(inner_expr_s)?,
-                    _ => {
-                        self.add_error(
-                            format!(
-                                "Cannot take address of non-lvalue expression '{:?}'",
-                                inner_expr_s.0
-                            ),
-                            inner_expr_s.1.clone(),
-                        );
-                        return Err(());
-                    }
-                };
-
-                Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(lvalue_type))))
-            }
+            UnaryOp::AddressOf => match self.lvalue_type(inner_expr_s) {
+                Ok(lvalue_type) => Ok(Type::Primitive(PrimitiveType::Ptr(Box::new(lvalue_type)))),
+                Err(LValueError::Reported) => Err(()),
+                Err(LValueError::NotLValue) => {
+                    self.add_error(
+                        format!(
+                            "Cannot take address of non-lvalue expression '{:?}'",
+                            inner_expr_s.0
+                        ),
+                        inner_expr_s.1.clone(),
+                    );
+                    Err(())
+                }
+            },
 
             _ => {
                 let operand_type = self.type_of_expr(inner_expr_s)?;
@@ -205,7 +239,7 @@ impl SemanticAnalyzer {
                 }
             },
 
-            BinOp::Mul | BinOp::Div | BinOp::Mod => match (&lhs_type, &rhs_type) {
+            BinOp::Mul | BinOp::Div => match (&lhs_type, &rhs_type) {
                 (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
                     Ok(Type::Primitive(PrimitiveType::Int))
                 }
@@ -219,7 +253,41 @@ impl SemanticAnalyzer {
                 _ => {
                     self.add_error(
                         format!(
-                            "Operator '{:?}' not supported for types '{}' and '{}'",
+                            "Operator '{}' not supported for types '{}' and '{}'",
+                            op, lhs_type, rhs_type
+                        ),
+                        op_expr_span.clone(),
+                    );
+
+                    Err(())
+                }
+            },
+
+            BinOp::Mod => match (&lhs_type, &rhs_type) {
+                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
+                    Ok(Type::Primitive(PrimitiveType::Int))
+                }
+                _ => {
+                    self.add_error(
+                        format!(
+                            "Operator '{}' not supported for types '{}' and '{}'",
+                            op, lhs_type, rhs_type
+                        ),
+                        op_expr_span.clone(),
+                    );
+
+                    Err(())
+                }
+            },
+
+            BinOp::LShift | BinOp::RShift => match (&lhs_type, &rhs_type) {
+                (Type::Primitive(PrimitiveType::Int), Type::Primitive(PrimitiveType::Int)) => {
+                    Ok(Type::Primitive(PrimitiveType::Int))
+                }
+                _ => {
+                    self.add_error(
+                        format!(
+                            "Operator '{}' not supported for types '{}' and '{}'",
                             op, lhs_type, rhs_type
                         ),
                         op_expr_span.clone(),
@@ -274,15 +342,6 @@ impl SemanticAnalyzer {
 
                 Ok(Type::Primitive(PrimitiveType::Char))
             }
-
-            _ => {
-                self.add_error(
-                    format!("Unsupported binary operator '{:?}'", op),
-                    op_expr_span.clone(),
-                );
-
-                Err(())
-            }
         }
     }
 
@@ -333,34 +392,10 @@ impl SemanticAnalyzer {
         lhs_s: &Spanned<Expression<'a>>,
         rhs_s: &Spanned<Expression<'a>>,
     ) -> Result<Type, ()> {
-        let lhs_type = match &lhs_s.0 {
-            Expression::Variable(v_name) => self.lookup_variable(&(v_name, lhs_s.1.clone()))?,
-
-            Expression::StructFieldAccess { .. } => self.type_of_expr(lhs_s)?,
-
-            Expression::UnaryOp {
-                op: UnaryOp::Deref,
-                expr: inner_expr_s,
-            } => {
-                let pointer_type = self.type_of_expr(inner_expr_s.as_ref())?;
-
-                match pointer_type {
-                    Type::Primitive(PrimitiveType::Ptr(pointee_type)) => *pointee_type,
-                    _ => {
-                        self.add_error(
-                            format!(
-                                "Cannot assign to a dereferenced non-pointer type '{}'",
-                                pointer_type
-                            ),
-                            lhs_s.1.clone(),
-                        );
-
-                        return Err(());
-                    }
-                }
-            }
-
-            _ => {
+        let lhs_type = match self.lvalue_type(lhs_s) {
+            Ok(lhs_type) => lhs_type,
+            Err(LValueError::Reported) => return Err(()),
+            Err(LValueError::NotLValue) => {
                 self.add_error_with_labels(
                     "Left-hand side of assignment must be an l-value (e.g., variable, field access, or pointer dereference)".to_string(),
                     lhs_s.1.clone(),

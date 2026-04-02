@@ -2,79 +2,95 @@
 
 [![Rust](https://github.com/shvrma/ypc/actions/workflows/rust.yml/badge.svg)](https://github.com/shvrma/ypc/actions/workflows/rust.yml)
 
-ypc is a standalone compiler frontend for an experimental, C-like toy programming language. This project is a deep dive into compiler theory and practice, built entirely in Rust.
+`ypc` is a standalone compiler frontend for an experimental C-like toy language, written in Rust. The project is intentionally scoped around frontend work: lexing, parsing, semantic analysis, and diagnostic reporting.
 
-It implements:
+## What This Project Demonstrates
 
-- Lexical Analysis.
-- Parsing: featuring a Pratt parser for expressions.
-- Semantic Analysis: Full type checking, scope management, and error validation.
-- Beautiful Error Reporting: Generates user-friendly, *rustc*-style error messages.
+- Tokenization with `logos`.
+- Pratt-style expression parsing with `chumsky`.
+- Typed AST traversal and semantic analysis.
+- Scope, function, and type environments.
+- Pointer and struct semantics, including l-value checks.
+- Rich source diagnostics with `ariadne`.
+- Regression-oriented testing and CI discipline.
+
+## Current Feature Set
+
+- Top-level items: `func`, `const`, `struct`.
+- Statements: variable declarations, blocks, `if`/`else`, `for`, `break`, `continue`, `return`, empty statements, expression statements.
+- Expressions: assignment, arithmetic, comparisons, logical operators, shifts, unary operators, function calls, field access.
+- Types: built-in primitives, user-defined structs, pointers.
+- Type checking rules:
+  - exact type matches
+  - `int -> float`
+  - `void* <-> *T`
+- Control-flow validation for non-`void` functions.
+- User-facing diagnostics for parse and semantic failures.
+- Library-first API via `src/lib.rs` plus a thin CLI in `src/main.rs`.
+
+## Known Non-Goals
+
+- No interpreter or runtime execution engine.
+- No code generation backend.
+- No optimizer.
+- No LSP or editor integration.
 
 ## Project Layout
 
-- `src/main.rs` – CLI entrypoint that wires together the pipeline and handles file loading / diagnostics.
-- `src/lexer.rs` – Logos-based tokenizer that turns raw source into a token stream.
-- `src/parser.rs` & `src/parser/` – Pratt expression parser plus statement / item parsing helpers.
-- `src/sem.rs` & `src/sem/` – Semantic analysis passes, type system definitions, and targeted regression tests.
-- `src/sem/tests/*.ypc` – Example programs that double as fixtures for semantic tests and manual experimentation.
+- `src/lib.rs`: public compiler frontend API.
+- `src/main.rs`: CLI entrypoint and diagnostic rendering.
+- `src/lexer.rs`: tokenization.
+- `src/parser.rs` and `src/parser/`: AST construction and Pratt parser helpers.
+- `src/sem.rs` and `src/sem/`: semantic analysis, type system, and regression tests.
+- `src/sem/tests/*.ypc`: fixture programs used by semantic tests.
+- `.github/workflows/rust.yml`: formatting, clippy, and test checks.
 
-## Literature used
-
-- [Modern Compiler Implementation in C](https://www.amazon.com/Modern-Compiler-Implement-Andrew-Appel/dp/0521607655)
-
-## Development Environment (Nix)
-
-This repository is fully configured for a reproducible development environment using Nix. Simply enter the shell to get started:
+## Build And Run
 
 ```sh
-# If you have direnv installed (recommended)
-direnv allow
-
-# Or, to enter the shell manually
-nix-shell
-```
-
-## How to Build & Run
-
-Once inside the Nix shell:
-
-```sh
-# Build the project
 cargo build
-
-# Run the compiler on an example file
 cargo run -- src/sem/tests/hello_world.ypc
 ```
 
-## Testing & Validation
+If you use Nix, the repository also includes `shell.nix`.
 
-The repository includes fast regression suites to keep the language semantics honest:
+## Public API
 
-- `cargo test` – runs all Rust unit tests plus the semantic analyzer fixtures under `src/sem/tests.rs`.
-- `cargo test sem::tests` – focuses on the semantic analyzer harness if you're iterating on the type checker.
-- `cargo run -- <path>` – quickly exercises a specific `.ypc` program; try the samples in `src/sem/tests/`.
+The crate exposes a small reusable frontend API:
 
-When adding new language features, drop a representative `.ypc` program into `src/sem/tests/` and reference it from `src/sem/tests.rs` to guard against regressions.
+```rust
+use ypc::{analyze_file, analyze_source, has_errors};
 
-## Language Overview & Examples
+let diagnostics = analyze_source("func main() void {}");
+assert!(!has_errors(&diagnostics));
 
-The language is C-like, with functions, variables, pointers, structs, and a familiar syntax.
+let diagnostics = analyze_file("src/sem/tests/hello_world.ypc")?;
+assert!(!has_errors(&diagnostics));
+# Ok::<(), anyhow::Error>(())
+```
 
-### Hello, World
+## Quality Gates
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test
+```
+
+## Example Programs
+
+Hello world:
 
 ```c
-// See: src/sem/tests/hello_world.ypc
 func main() void {
     print("Hello, world!\n")
     print("Have fun :)")
 }
 ```
 
-### Factorial calculation via recursion
+Recursive factorial:
 
 ```c
-// See: src/sem/tests/factorial.ypc
 func fact(n int) int {
     if n == 0 {
         return 1
@@ -84,10 +100,9 @@ func fact(n int) int {
 }
 ```
 
-### Structs showcase
+Structs and pointers:
 
 ```c
-// See: src/sem/tests/structs_magic.ypc
 struct User {
     id *char
     name *char
@@ -101,15 +116,23 @@ func main() void {
     (*me).name = "Imaginary Name"
     (*me).age = 19
 }
-
 ```
 
-### Language Grammar (EBNF)
+## Semantic Notes
 
-```enf
+- `return` may omit an expression only in `void` functions.
+- Non-`void` functions must return on all reachable paths.
+- `%` is defined only for `int`.
+- `<<` and `>>` are defined only for `int`.
+- `&*p` is valid when `p` is a pointer.
+- `//` comments may appear at end of file without a trailing newline.
+
+## Language Grammar
+
+```ebnf
 program ::= { item } EOF
 
-type_name = Identifier | "*" type_name
+type_name ::= Identifier | "*" type_name
 
 item ::= func_decl | const_decl | struct_decl
 
@@ -121,25 +144,21 @@ func_params ::= [ single_func_param { "," single_func_param } ]
 
 single_func_param ::= Identifier type_name
 
-struct_decl ::= "struct" Identifier "{" [ { struct_field } ] "}"
+struct_decl ::= "struct" Identifier "{" { struct_field } "}"
 
 struct_field ::= Identifier type_name
 
 block ::= "{" { statement } "}"
 
-statement ::= semicolon_stmt
+statement ::= ";"
             | var_decl
             | if_else_stmt
             | for_loop_stmt
             | "break"
             | "continue"
             | return_stmt
-            | block_statement
-            | expression_statement
-
-semicolon_stmt ::= ";"
-
-expression_statement ::= expression
+            | block
+            | expression
 
 var_decl ::= "var" Identifier [ type_name ] "=" expression
 
@@ -147,9 +166,7 @@ if_else_stmt ::= "if" expression block [ "else" block ]
 
 for_loop_stmt ::= "for" var_decl ";" expression ";" expression block
 
-block_statement ::= block
-
-return_stmt ::= "return" expression
+return_stmt ::= "return" [ expression ]
 
 expression ::= assignment | logical_or_expr
 

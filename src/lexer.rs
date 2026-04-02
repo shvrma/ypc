@@ -15,30 +15,30 @@ pub enum LexingError {
     #[default]
     NonAsciiCharacter,
 
-    InvallidEscapeSequence(String),
+    InvalidEscapeSequence(String),
 }
 
 impl From<ParseIntError> for LexingError {
     fn from(err: ParseIntError) -> Self {
-        LexingError::InvalidInteger(err.to_string())
+        Self::InvalidInteger(err.to_string())
     }
 }
 
 impl From<ParseFloatError> for LexingError {
     fn from(err: ParseFloatError) -> Self {
-        LexingError::InvalidFloat(err.to_string())
+        Self::InvalidFloat(err.to_string())
     }
 }
 
 /// Converts the characters between the surrounding quotes of a string literal token
 /// into their runtime form, handling escapes like `\n`, `\t`, and `\"`.
 fn handle_escape_sequences<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Result<String, LexingError> {
-    let s = lex.slice();
-    let s = s[1..s.len() - 1].to_string();
-    let mut unescaped = String::with_capacity(s.len());
+    let slice = lex.slice();
+    let inner = &slice[1..slice.len() - 1];
+    let mut unescaped = String::with_capacity(inner.len());
 
     let mut is_escaped = false;
-    for c in s.chars() {
+    for c in inner.chars() {
         if is_escaped {
             match c {
                 'n' => unescaped.push('\n'),
@@ -46,8 +46,8 @@ fn handle_escape_sequences<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Result<String,
                 'r' => unescaped.push('\r'),
                 '"' => unescaped.push('"'),
                 '\\' => unescaped.push('\\'),
-                _ => return Err(LexingError::InvallidEscapeSequence(c.to_string())),
-            };
+                _ => return Err(LexingError::InvalidEscapeSequence(c.to_string())),
+            }
             is_escaped = false;
         } else if c == '\\' {
             is_escaped = true;
@@ -57,7 +57,7 @@ fn handle_escape_sequences<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Result<String,
     }
 
     if is_escaped {
-        return Err(LexingError::InvallidEscapeSequence(
+        return Err(LexingError::InvalidEscapeSequence(
             "Trailing backslash".to_string(),
         ));
     }
@@ -66,12 +66,12 @@ fn handle_escape_sequences<'a>(lex: &mut Lexer<'a, Token<'a>>) -> Result<String,
 }
 
 #[derive(Debug, Clone, PartialEq, Logos)]
-#[logos(skip r"[[:space:]]*")]
-#[logos(skip r"//[^\n]*\n")]
+#[logos(skip r"[[:space:]]+")]
+#[logos(skip r"//[^\n]*")]
 #[logos(error = LexingError)]
 /// Token kinds that make up the surface syntax of the language.
 pub enum Token<'a> {
-    MalformedToken(LexingError),
+    Invalid(LexingError),
 
     #[regex(r"([[:alpha:]]|_)([[:alnum:]]|_)*", |lex| lex.slice())]
     Identifier(&'a str),
@@ -160,51 +160,51 @@ pub enum Token<'a> {
 
 impl<'a> Display for Token<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        const HL_COLOR: Color = Color::BrightRed;
+        const HIGHLIGHT: Color = Color::BrightRed;
 
         match self {
-            Token::Identifier(s) => write!(f, "Identifier({})", s),
-            Token::IntConstant(n) => write!(f, "Integer Constant({})", n),
-            Token::FloatConstant(n) => write!(f, "Float Constant({})", n),
-            Token::StringLiteral(s) => write!(f, "String Literal({})", s),
-            Token::MalformedToken(e) => write!(f, "Malformed Token({:?})", e),
+            Self::Identifier(s) => write!(f, "Identifier({s})"),
+            Self::IntConstant(n) => write!(f, "Integer Constant({n})"),
+            Self::FloatConstant(n) => write!(f, "Float Constant({n})"),
+            Self::StringLiteral(s) => write!(f, "String Literal({s})"),
+            Self::Invalid(e) => write!(f, "Invalid Token({e:?})"),
 
-            Token::BreakKeyword => write!(f, "{}", "break".fg(HL_COLOR)),
-            Token::FuncKeyword => write!(f, "{}", "func".fg(HL_COLOR)),
-            Token::StructKeyword => write!(f, "{}", "struct".fg(HL_COLOR)),
-            Token::ElseKeyword => write!(f, "{}", "else".fg(HL_COLOR)),
-            Token::ConstKeyword => write!(f, "{}", "const".fg(HL_COLOR)),
-            Token::IfKeyword => write!(f, "{}", "if".fg(HL_COLOR)),
-            Token::ContinueKeyword => write!(f, "{}", "continue".fg(HL_COLOR)),
-            Token::ForKeyword => write!(f, "{}", "for".fg(HL_COLOR)),
-            Token::ReturnKeyword => write!(f, "{}", "return".fg(HL_COLOR)),
-            Token::VarKeyword => write!(f, "{}", "var".fg(HL_COLOR)),
+            Self::BreakKeyword => write!(f, "{}", "break".fg(HIGHLIGHT)),
+            Self::FuncKeyword => write!(f, "{}", "func".fg(HIGHLIGHT)),
+            Self::StructKeyword => write!(f, "{}", "struct".fg(HIGHLIGHT)),
+            Self::ElseKeyword => write!(f, "{}", "else".fg(HIGHLIGHT)),
+            Self::ConstKeyword => write!(f, "{}", "const".fg(HIGHLIGHT)),
+            Self::IfKeyword => write!(f, "{}", "if".fg(HIGHLIGHT)),
+            Self::ContinueKeyword => write!(f, "{}", "continue".fg(HIGHLIGHT)),
+            Self::ForKeyword => write!(f, "{}", "for".fg(HIGHLIGHT)),
+            Self::ReturnKeyword => write!(f, "{}", "return".fg(HIGHLIGHT)),
+            Self::VarKeyword => write!(f, "{}", "var".fg(HIGHLIGHT)),
 
-            Token::PlusSign => write!(f, "{}", "+".fg(HL_COLOR)),
-            Token::AmpersandAmpersandSign => write!(f, "{}", "&&".fg(HL_COLOR)),
-            Token::EqualEqualSign => write!(f, "{}", "==".fg(HL_COLOR)),
-            Token::ExclamationMarkEqualSign => write!(f, "{}", "!=".fg(HL_COLOR)),
-            Token::LeftParenthesisSign => write!(f, "{}", "(".fg(HL_COLOR)),
-            Token::RightParenthesisSign => write!(f, "{}", ")".fg(HL_COLOR)),
-            Token::MinusSign => write!(f, "{}", "-".fg(HL_COLOR)),
-            Token::PipePipeSign => write!(f, "{}", "||".fg(HL_COLOR)),
-            Token::LessThanSign => write!(f, "{}", "<".fg(HL_COLOR)),
-            Token::LessThanEqualSign => write!(f, "{}", "<=".fg(HL_COLOR)),
-            Token::AsteriskSign => write!(f, "{}", "*".fg(HL_COLOR)),
-            Token::GreaterThanSign => write!(f, "{}", ">".fg(HL_COLOR)),
-            Token::GreaterThanEqualSign => write!(f, "{}", ">=".fg(HL_COLOR)),
-            Token::LeftFigureBracketSign => write!(f, "{}", "{".fg(HL_COLOR)),
-            Token::RightFigureBracketSign => write!(f, "{}", "}".fg(HL_COLOR)),
-            Token::SlashSign => write!(f, "{}", "/".fg(HL_COLOR)),
-            Token::LessThanLessThanSign => write!(f, "{}", "<<".fg(HL_COLOR)),
-            Token::EqualSign => write!(f, "{}", "=".fg(HL_COLOR)),
-            Token::CommaSign => write!(f, "{}", ",".fg(HL_COLOR)),
-            Token::SemicolonSign => write!(f, "{}", ";".fg(HL_COLOR)),
-            Token::PercentSign => write!(f, "{}", "%".fg(HL_COLOR)),
-            Token::GreaterThanGreaterThanSign => write!(f, "{}", ">>".fg(HL_COLOR)),
-            Token::ExclamationMarkSign => write!(f, "{}", "!".fg(HL_COLOR)),
-            Token::DotSign => write!(f, "{}", ".".fg(HL_COLOR)),
-            Token::AmpersandSign => write!(f, "{}", "&".fg(HL_COLOR)),
+            Self::PlusSign => write!(f, "{}", "+".fg(HIGHLIGHT)),
+            Self::AmpersandAmpersandSign => write!(f, "{}", "&&".fg(HIGHLIGHT)),
+            Self::EqualEqualSign => write!(f, "{}", "==".fg(HIGHLIGHT)),
+            Self::ExclamationMarkEqualSign => write!(f, "{}", "!=".fg(HIGHLIGHT)),
+            Self::LeftParenthesisSign => write!(f, "{}", "(".fg(HIGHLIGHT)),
+            Self::RightParenthesisSign => write!(f, "{}", ")".fg(HIGHLIGHT)),
+            Self::MinusSign => write!(f, "{}", "-".fg(HIGHLIGHT)),
+            Self::PipePipeSign => write!(f, "{}", "||".fg(HIGHLIGHT)),
+            Self::LessThanSign => write!(f, "{}", "<".fg(HIGHLIGHT)),
+            Self::LessThanEqualSign => write!(f, "{}", "<=".fg(HIGHLIGHT)),
+            Self::AsteriskSign => write!(f, "{}", "*".fg(HIGHLIGHT)),
+            Self::GreaterThanSign => write!(f, "{}", ">".fg(HIGHLIGHT)),
+            Self::GreaterThanEqualSign => write!(f, "{}", ">=".fg(HIGHLIGHT)),
+            Self::LeftFigureBracketSign => write!(f, "{}", "{".fg(HIGHLIGHT)),
+            Self::RightFigureBracketSign => write!(f, "{}", "}".fg(HIGHLIGHT)),
+            Self::SlashSign => write!(f, "{}", "/".fg(HIGHLIGHT)),
+            Self::LessThanLessThanSign => write!(f, "{}", "<<".fg(HIGHLIGHT)),
+            Self::EqualSign => write!(f, "{}", "=".fg(HIGHLIGHT)),
+            Self::CommaSign => write!(f, "{}", ",".fg(HIGHLIGHT)),
+            Self::SemicolonSign => write!(f, "{}", ";".fg(HIGHLIGHT)),
+            Self::PercentSign => write!(f, "{}", "%".fg(HIGHLIGHT)),
+            Self::GreaterThanGreaterThanSign => write!(f, "{}", ">>".fg(HIGHLIGHT)),
+            Self::ExclamationMarkSign => write!(f, "{}", "!".fg(HIGHLIGHT)),
+            Self::DotSign => write!(f, "{}", ".".fg(HIGHLIGHT)),
+            Self::AmpersandSign => write!(f, "{}", "&".fg(HIGHLIGHT)),
         }
     }
 }
@@ -215,8 +215,9 @@ mod tests {
 
     fn lex_input(input: &str) -> Vec<Token<'_>> {
         Token::lexer(input)
-            .map(|res| {
-                res.unwrap_or_else(|e| panic!("Lexing failed for input '{}': {:?}", input, e))
+            .map(|result| {
+                result
+                    .unwrap_or_else(|error| panic!("Lexing failed for input '{input}': {error:?}"))
             })
             .collect::<Vec<_>>()
     }
@@ -354,6 +355,14 @@ mod tests {
                 Token::Identifier("y"),
             ]
         );
+    }
+
+    #[test]
+    fn test_single_line_comment_at_eof() {
+        let input = "var x // this is a comment";
+        let result = lex_input(input);
+
+        assert_eq!(result, vec![Token::VarKeyword, Token::Identifier("x"),]);
     }
 
     #[test]

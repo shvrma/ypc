@@ -6,14 +6,14 @@ pub struct Block<'a>(pub Vec<Spanned<Statement<'a>>>);
 
 #[derive(Debug, PartialEq)]
 pub enum Statement<'a> {
-    SemicolonStatement,
-    ExpressionStatement(Spanned<Expression<'a>>),
+    Empty,
+    Expression(Spanned<Expression<'a>>),
     VarDecl {
         name: Spanned<&'a str>,
         type_name: Option<Spanned<TypeName<'a>>>,
         init_expr: Spanned<Expression<'a>>,
     },
-    IfStatement {
+    If {
         condition: Spanned<Expression<'a>>,
         body: Spanned<Block<'a>>,
         else_body: Option<Spanned<Block<'a>>>,
@@ -26,18 +26,18 @@ pub enum Statement<'a> {
     },
     Break,
     Continue,
-    BlockStatement(Spanned<Block<'a>>),
-    ReturnStatement(Option<Spanned<Expression<'a>>>),
+    Block(Spanned<Block<'a>>),
+    Return(Option<Spanned<Expression<'a>>>),
 }
 
 pub fn block<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
 -> impl Parser<'a, I, Spanned<Block<'a>>, ExtraT<'a>> + Clone {
     recursive(|block| {
         let semicolon_stmt =
-            just(Token::SemicolonSign).map_with(|_, e| (Statement::SemicolonStatement, e.span()));
+            just(Token::SemicolonSign).map_with(|_, e| (Statement::Empty, e.span()));
 
         let expr_stmt = expr()
-            .map_with(|expr, e| (Statement::ExpressionStatement(expr), e.span()))
+            .map_with(|expr, e| (Statement::Expression(expr), e.span()))
             .labelled("expression statement");
 
         let var_decl = just(Token::VarKeyword)
@@ -62,7 +62,7 @@ pub fn block<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
             .then(just(Token::ElseKeyword).ignore_then(block.clone()).or_not())
             .map_with(|((cond, body), else_body), e| {
                 (
-                    Statement::IfStatement {
+                    Statement::If {
                         condition: cond,
                         body,
                         else_body,
@@ -92,11 +92,11 @@ pub fn block<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
 
         let inner_block = block
             .clone()
-            .map_with(|b, e| (Statement::BlockStatement(b), e.span()));
+            .map_with(|b, e| (Statement::Block(b), e.span()));
 
         let return_stmt = just(Token::ReturnKeyword)
             .ignore_then(expr().or_not())
-            .map_with(|expr, e| (Statement::ReturnStatement(expr), e.span()));
+            .map_with(|expr, e| (Statement::Return(expr), e.span()));
 
         choice((
             semicolon_stmt,
@@ -136,16 +136,13 @@ mod tests {
     }
 
     #[test]
-    fn test_block_single_expression_statement() {
+    fn test_block_single_expression() {
         let result = block().parse(into_parser_input("{ 123 }")).into_result();
         match result {
             Ok((Block(stmts), _)) if stmts.len() == 1 => match &stmts[0] {
-                (Statement::ExpressionStatement((Expression::IntConst(123), _)), _) => (),
+                (Statement::Expression((Expression::IntConst(123), _)), _) => (),
 
-                _ => panic!(
-                    "Expected ExpressionStatement(IntConst(123)), got {:?}",
-                    stmts
-                ),
+                _ => panic!("Expected Expression(IntConst(123)), got {:?}", stmts),
             },
 
             _ => panic!("Expected Block with one statement, got {:?}", result),
@@ -153,17 +150,17 @@ mod tests {
     }
 
     #[test]
-    fn test_block_expr_stmt_and_semicolon_stmt() {
+    fn test_block_expr_and_empty() {
         let result = block().parse(into_parser_input("{ 123; }")).into_result();
         match result {
             Ok((Block(stmts), _)) => match stmts.as_slice() {
                 [
-                    (Statement::ExpressionStatement((Expression::IntConst(123), _)), _),
-                    (Statement::SemicolonStatement, _),
+                    (Statement::Expression((Expression::IntConst(123), _)), _),
+                    (Statement::Empty, _),
                 ] => (),
 
                 _ => panic!(
-                    "Expected ExpressionStatement with IntConst(123) and Semicolon, got {:?}",
+                    "Expected Expression with IntConst(123) and Empty, got {:?}",
                     stmts
                 ),
             },
@@ -188,7 +185,7 @@ mod tests {
                         },
                         _,
                     ),
-                    (Statement::SemicolonStatement, _),
+                    (Statement::Empty, _),
                 ] => (),
 
                 _ => panic!(
@@ -210,25 +207,25 @@ mod tests {
         match result {
             Ok((Block(block_stmts), _)) if block_stmts.len() == 1 => match &block_stmts[0] {
                 (
-                    Statement::IfStatement {
+                    Statement::If {
                         condition: (Expression::IntConst(1), _),
                         body: (Block(body_stmts), _),
                         else_body: None,
                     },
                     _,
                 ) if body_stmts.len() == 1 => match &body_stmts[0] {
-                    (Statement::ExpressionStatement((Expression::IntConst(2), _)), _) => (),
+                    (Statement::Expression((Expression::IntConst(2), _)), _) => (),
 
                     _ => panic!(
-                        "Expected ExpressionStatement(IntConst(2)) in if body, got {:?}",
+                        "Expected Expression(IntConst(2)) in if body, got {:?}",
                         body_stmts
                     ),
                 },
 
-                _ => panic!("Expected IfStatement, got {:?}", block_stmts[0]),
+                _ => panic!("Expected If, got {:?}", block_stmts[0]),
             },
 
-            _ => panic!("Expected Block with one IfStatement, got {:?}", result),
+            _ => panic!("Expected Block with one If, got {:?}", result),
         }
     }
 
@@ -241,7 +238,7 @@ mod tests {
         match result {
             Ok((Block(block_stmts), _)) if block_stmts.len() == 1 => match &block_stmts[0] {
                 (
-                    Statement::IfStatement {
+                    Statement::If {
                         condition: (Expression::IntConst(1), _),
                         body: (Block(if_body_stmts), _),
                         else_body: Some((Block(else_body_stmts), _)),
@@ -249,8 +246,8 @@ mod tests {
                     _,
                 ) => match (if_body_stmts.as_slice(), else_body_stmts.as_slice()) {
                     (
-                        [(Statement::ExpressionStatement((Expression::IntConst(2), _)), _)],
-                        [(Statement::ExpressionStatement((Expression::IntConst(3), _)), _)],
+                        [(Statement::Expression((Expression::IntConst(2), _)), _)],
+                        [(Statement::Expression((Expression::IntConst(3), _)), _)],
                     ) => (),
 
                     _ => panic!(
@@ -259,10 +256,10 @@ mod tests {
                     ),
                 },
 
-                _ => panic!("Expected IfStatement with else, got {:?}", block_stmts[0]),
+                _ => panic!("Expected If with else, got {:?}", block_stmts[0]),
             },
 
-            _ => panic!("Expected Block with one IfStatement, got {:?}", result),
+            _ => panic!("Expected Block with one If, got {:?}", result),
         }
     }
 
@@ -329,7 +326,7 @@ mod tests {
                     }
 
                     match &body_stmts[0] {
-                        (Statement::ExpressionStatement((Expression::IntConst(1), _)), _) => (),
+                        (Statement::Expression((Expression::IntConst(1), _)), _) => (),
 
                         _ => panic!("Incorrect body in for loop: {:?}", body_stmts),
                     }
@@ -351,14 +348,11 @@ mod tests {
         match result {
             Ok((Block(stmts), _)) => match &stmts[..] {
                 [
-                    (Statement::ReturnStatement(Some((Expression::Variable("x"), _))), _),
-                    (Statement::SemicolonStatement, _),
+                    (Statement::Return(Some((Expression::Variable("x"), _))), _),
+                    (Statement::Empty, _),
                 ] => (),
 
-                _ => panic!(
-                    "Expected ReturnStatement with Variable x and Semicolon, got {:?}",
-                    stmts
-                ),
+                _ => panic!("Expected Return with Variable x and Empty, got {:?}", stmts),
             },
 
             _ => panic!("Expected Block with Return and Semicolon, got {:?}", result),

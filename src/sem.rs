@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt::Display};
+use std::{
+    collections::{HashMap, HashSet, hash_map::Entry},
+    fmt::Display,
+};
 
 use crate::parser::{Item, SpanT, Spanned, TypeName};
 
@@ -88,7 +91,7 @@ pub type ErrLabel = (String, SpanT);
 
 #[derive(Debug)]
 /// Error produced by the analyzer.
-pub struct ErrT {
+pub struct SemanticError {
     pub message: String,
     pub span: SpanT,
     pub labels: Vec<ErrLabel>,
@@ -103,7 +106,7 @@ pub struct SemanticAnalyzer {
     current_function_return_type: Option<Type>,
     loop_depth: usize,
 
-    errors: Vec<ErrT>,
+    errors: Vec<SemanticError>,
     runtime_type_struct_definition: Type,
 }
 
@@ -182,13 +185,13 @@ impl SemanticAnalyzer {
     }
 
     /// Entry point that runs the semantic pipeline over all parsed items and returns accumulated errors.
-    pub fn analyze<'a>(items: &'a [Spanned<Item<'a>>]) -> Vec<ErrT> {
+    pub fn analyze<'a>(items: &'a [Spanned<Item<'a>>]) -> Vec<SemanticError> {
         let mut analyzer = SemanticAnalyzer::new();
 
         analyzer.populate_declarations(items);
 
         if analyzer.errors.is_empty() {
-            let _ = analyzer.analyze_item_bodies(items);
+            analyzer.analyze_item_bodies(items);
         }
 
         analyzer.errors
@@ -204,7 +207,7 @@ impl SemanticAnalyzer {
     }
 
     fn add_error(&mut self, message: String, span: SpanT) {
-        self.errors.push(ErrT {
+        self.errors.push(SemanticError {
             message,
             span,
             labels: vec![],
@@ -212,14 +215,14 @@ impl SemanticAnalyzer {
     }
 
     fn add_error_with_labels(&mut self, message: String, span: SpanT, labels: Vec<ErrLabel>) {
-        self.errors.push(ErrT {
+        self.errors.push(SemanticError {
             message,
             span,
             labels,
         });
     }
 
-    fn lookup_variable<'a>(&mut self, name: &Spanned<&'a str>) -> Result<Type, ()> {
+    fn lookup_variable(&mut self, name: &Spanned<&str>) -> Result<Type, ()> {
         let (name, span) = name;
 
         for scope in self.var_env_stack.iter().rev() {
@@ -264,29 +267,36 @@ impl SemanticAnalyzer {
         }
     }
 
+    fn types_compatible(expected: &Type, found: &Type) -> bool {
+        if expected == found {
+            return true;
+        }
+
+        if *expected == Type::Primitive(PrimitiveType::Float)
+            && *found == Type::Primitive(PrimitiveType::Int)
+        {
+            return true;
+        }
+
+        match (expected, found) {
+            (
+                Type::Primitive(PrimitiveType::Ptr(expected_inner)),
+                Type::Primitive(PrimitiveType::Ptr(found_inner)),
+            ) => {
+                **expected_inner == Type::Primitive(PrimitiveType::Void)
+                    || **found_inner == Type::Primitive(PrimitiveType::Void)
+            }
+            _ => false,
+        }
+    }
+
     /// Ensures the found type matches the expected type, allowing for implicit float<-int and void*-style conversions.
     fn expect_type(&mut self, expected: &Spanned<Type>, found: &Spanned<Type>) -> Result<(), ()> {
         let (expected_ty, expected_span) = expected;
         let (found_ty, found_span) = found;
 
-        if expected_ty == found_ty {
+        if Self::types_compatible(expected_ty, found_ty) {
             return Ok(());
-        }
-
-        if *expected_ty == Type::Primitive(PrimitiveType::Float)
-            && *found_ty == Type::Primitive(PrimitiveType::Int)
-        {
-            return Ok(());
-        }
-
-        if let Type::Primitive(PrimitiveType::Ptr(_)) = expected_ty {
-            if *found_ty
-                == Type::Primitive(PrimitiveType::Ptr(Box::new(Type::Primitive(
-                    PrimitiveType::Void,
-                ))))
-            {
-                return Ok(());
-            }
         }
 
         self.add_error_with_labels(
@@ -323,7 +333,7 @@ impl SemanticAnalyzer {
     fn populate_declarations<'a>(&mut self, items: &'a [Spanned<Item<'a>>]) {
         for (item_spanned, _i_span) in items.iter().map(|s| (&s.0, s.1.clone())) {
             match item_spanned {
-                Item::StructDecl {
+                Item::Struct {
                     name: s_name,
                     fields,
                 } => {
@@ -340,7 +350,7 @@ impl SemanticAnalyzer {
 
                     let mut fields_map = HashMap::new();
                     for (((f_name, f_name_s), f_type_node_s), _) in fields {
-                        let Ok(ty) = self.resolve_type_node(&f_type_node_s) else {
+                        let Ok(ty) = self.resolve_type_node(f_type_node_s) else {
                             continue;
                         };
 
@@ -373,19 +383,28 @@ impl SemanticAnalyzer {
 
                         continue;
                     };
+
                     let type_const_name = format!("TYPE_{}", s_name);
-                    if global_scope.contains_key(&type_const_name) {
+                    let has_conflict = match global_scope.entry(type_const_name.clone()) {
+                        Entry::Occupied(_) => true,
+                        Entry::Vacant(entry) => {
+                            entry.insert(self.runtime_type_struct_definition.clone());
+                            false
+                        }
+                    };
+
+                    if has_conflict {
                         self.add_error(
-                                    format!("Type constant '{}' would conflict with an existing global variable.", type_const_name),
-                                    s_name_s.to_owned(),
-                                );
-                    } else {
-                        global_scope
-                            .insert(type_const_name, self.runtime_type_struct_definition.clone());
+                            format!(
+                                "Type constant '{}' would conflict with an existing global variable.",
+                                type_const_name
+                            ),
+                            s_name_s.to_owned(),
+                        );
                     }
                 }
 
-                Item::FuncDecl {
+                Item::Function {
                     name,
                     params,
                     ret_type,
@@ -402,16 +421,28 @@ impl SemanticAnalyzer {
                         continue;
                     }
 
+                    let mut seen_params = HashSet::new();
+                    let mut duplicate_params = false;
+                    for ((param_name, param_span), _) in params.iter().map(|param| &param.0) {
+                        if !seen_params.insert(*param_name) {
+                            self.add_error(
+                                format!(
+                                    "Parameter '{}' is already defined in function '{}'",
+                                    param_name, f_name
+                                ),
+                                param_span.clone(),
+                            );
+                            duplicate_params = true;
+                        }
+                    }
+
                     let param_types = Vec::from_iter(params.iter().filter_map(
                         |((_p_name_s, p_type_node_s), _param_overall_span)| {
-                            match self.resolve_type_node(p_type_node_s) {
-                                Ok(ty) => Some(ty),
-                                Err(_) => None,
-                            }
+                            self.resolve_type_node(p_type_node_s).ok()
                         },
                     ));
 
-                    if param_types.len() == params.len() {
+                    if !duplicate_params && param_types.len() == params.len() {
                         if let Some(ret_type) = ret_type {
                             if let Ok(ret_type) = self.resolve_type_node(ret_type) {
                                 self.func_env

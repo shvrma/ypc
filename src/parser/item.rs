@@ -3,18 +3,18 @@ use crate::parser::*;
 
 #[derive(Debug, PartialEq)]
 pub enum Item<'a> {
-    FuncDecl {
+    Function {
         name: Spanned<&'a str>,
         body: Spanned<Block<'a>>,
         params: Vec<Spanned<(Spanned<&'a str>, Spanned<TypeName<'a>>)>>,
         ret_type: Option<Spanned<TypeName<'a>>>,
     },
-    ConstDecl {
+    Constant {
         name: Spanned<&'a str>,
         type_name: Option<Spanned<TypeName<'a>>>,
         init_expr: Spanned<Expression<'a>>,
     },
-    StructDecl {
+    Struct {
         name: Spanned<&'a str>,
         fields: Vec<Spanned<(Spanned<&'a str>, Spanned<TypeName<'a>>)>>,
     },
@@ -43,7 +43,7 @@ fn item<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
         .then(block())
         .map_with(|(((name, params), ret_type), body), e| {
             (
-                Item::FuncDecl {
+                Item::Function {
                     name,
                     params,
                     ret_type,
@@ -64,18 +64,13 @@ fn item<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
                 .labelled("struct field")
                 .repeated()
                 .collect::<Vec<_>>()
-                .map(|fields| {
-                    fields
-                        .into_iter()
-                        .map(|(name, ty)| (name, ty))
-                        .collect::<Vec<_>>()
-                })
+                .map(|fields| fields.into_iter().collect::<Vec<_>>())
                 .delimited_by(
                     just(Token::LeftFigureBracketSign),
                     just(Token::RightFigureBracketSign),
                 ),
         )
-        .map_with(|(name, fields), e| (Item::StructDecl { name, fields }, e.span()))
+        .map_with(|(name, fields), e| (Item::Struct { name, fields }, e.span()))
         .labelled("struct declaration");
 
     let const_decl = just(Token::ConstKeyword)
@@ -85,7 +80,7 @@ fn item<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
         .then(expr())
         .map_with(|((name, type_name), init_expr), e| {
             (
-                Item::ConstDecl {
+                Item::Constant {
                     name,
                     type_name,
                     init_expr,
@@ -118,7 +113,7 @@ mod tests {
 
         match result {
             Ok((
-                Item::FuncDecl {
+                Item::Function {
                     name: ("main", _),
                     params,
                     ret_type: Some((TypeName::Named("void"), _)),
@@ -127,7 +122,7 @@ mod tests {
                 _,
             )) if params.is_empty() && body_stmts.is_empty() => (),
 
-            _ => panic!("Expected simple FuncDecl, got {:?}", result),
+            _ => panic!("Expected simple Function, got {:?}", result),
         }
     }
 
@@ -139,7 +134,7 @@ mod tests {
 
         match result {
             Ok((
-                Item::FuncDecl {
+                Item::Function {
                     name: ("add", _),
                     params,
                     ret_type: Some((TypeName::Named("number"), _)),
@@ -155,7 +150,7 @@ mod tests {
                 _ => panic!("Expected two params: a int, b str, got {:?}", params),
             },
 
-            _ => panic!("Expected FuncDecl with params, got {:?}", result),
+            _ => panic!("Expected Function with params, got {:?}", result),
         }
     }
 
@@ -169,7 +164,7 @@ mod tests {
 
         match result {
             Ok((
-                Item::FuncDecl {
+                Item::Function {
                     name: ("compute", _),
                     params,
                     ret_type: Some((TypeName::Named("int"), _)),
@@ -186,18 +181,15 @@ mod tests {
                         },
                         _,
                     ),
-                    (Statement::SemicolonStatement, _),
-                    (Statement::ReturnStatement(Some((Expression::Variable("x"), _))), _),
-                    (Statement::SemicolonStatement, _),
+                    (Statement::Empty, _),
+                    (Statement::Return(Some((Expression::Variable("x"), _))), _),
+                    (Statement::Empty, _),
                 ] => (),
 
-                _ => panic!(
-                    "Expected VarDecl and ReturnStatement in body, got {:?}",
-                    body_stmts
-                ),
+                _ => panic!("Expected VarDecl and Return in body, got {:?}", body_stmts),
             },
 
-            _ => panic!("Expected FuncDecl with body statements, got {:?}", result),
+            _ => panic!("Expected Function with body statements, got {:?}", result),
         }
     }
 
@@ -211,7 +203,7 @@ mod tests {
 
         match result {
             Ok((
-                Item::FuncDecl {
+                Item::Function {
                     name: ("complex", _),
                     params,
                     ret_type: Some((TypeName::Named("int"), _)),
@@ -227,7 +219,7 @@ mod tests {
 
                 match &body_stmts[0] {
                     (
-                        Statement::IfStatement {
+                        Statement::If {
                             condition:
                                 (
                                     Expression::BinOp {
@@ -246,23 +238,18 @@ mod tests {
                         assert_eq!(rhs.0, Expression::IntConst(0));
 
                         match &if_body_stmts[0] {
-                            (
-                                Statement::ReturnStatement(Some((Expression::Variable("n"), _))),
-                                _,
-                            ) => (),
+                            (Statement::Return(Some((Expression::Variable("n"), _))), _) => (),
                             _ => panic!("Incorrect if body return, got {:?}", if_body_stmts[0]),
                         }
 
-                        assert_eq!(if_body_stmts[1].0, Statement::SemicolonStatement);
+                        assert_eq!(if_body_stmts[1].0, Statement::Empty);
 
                         match &else_body_stmts[0] {
-                            (Statement::ReturnStatement(Some((Expression::IntConst(0), _))), _) => {
-                                ()
-                            }
+                            (Statement::Return(Some((Expression::IntConst(0), _))), _) => {}
                             _ => panic!("Incorrect else body return, got {:?}", else_body_stmts[0]),
                         }
 
-                        assert_eq!(else_body_stmts[1].0, Statement::SemicolonStatement);
+                        assert_eq!(else_body_stmts[1].0, Statement::Empty);
                     }
 
                     _ => panic!(
@@ -272,7 +259,7 @@ mod tests {
                 }
             }
 
-            _ => panic!("Expected complex FuncDecl, got {:?}", result),
+            _ => panic!("Expected complex Function, got {:?}", result),
         }
     }
 }

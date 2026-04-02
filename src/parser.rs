@@ -45,7 +45,7 @@ type ExtraT<'a> = extra::Err<ErrT<'a>>;
 fn into_parser_input<'a>(input: &'a str) -> impl ValueInput<'a, Token = Token<'a>, Span = SpanT> {
     let token_iter = Token::lexer(input).spanned().map(|(tok, span)| match tok {
         Ok(tok) => (tok, span),
-        Err(err) => (Token::MalformedToken(err), span),
+        Err(err) => (Token::Invalid(err), span),
     });
 
     Stream::from_iter(token_iter).map(input.len()..input.len(), |(t, s)| (t, s))
@@ -100,7 +100,7 @@ mod tests {
         match items.as_slice() {
             [
                 (
-                    Item::FuncDecl {
+                    Item::Function {
                         name: ("main", _),
                         params,
                         ret_type: Some((TypeName::Named("void"), _)),
@@ -122,7 +122,7 @@ mod tests {
         match items.as_slice() {
             [
                 (
-                    Item::FuncDecl {
+                    Item::Function {
                         name: ("first", _),
                         params: first_params,
                         ret_type: Some((TypeName::Named("int"), _)),
@@ -131,7 +131,7 @@ mod tests {
                     _,
                 ),
                 (
-                    Item::FuncDecl {
+                    Item::Function {
                         name: ("second", _),
                         params: second_params,
                         ret_type: Some((TypeName::Named("bool"), _)),
@@ -142,10 +142,7 @@ mod tests {
             ] if first_params.is_empty()
                 && first_body.is_empty()
                 && second_params.is_empty()
-                && second_body.is_empty() =>
-            {
-                ()
-            }
+                && second_body.is_empty() => {}
 
             _ => panic!("Expected two functions: first and second, got {:?}", items),
         }
@@ -159,7 +156,7 @@ mod tests {
         match items.as_slice() {
             [
                 (
-                    Item::FuncDecl {
+                    Item::Function {
                         name: ("test", _),
                         params,
                         ret_type: Some((TypeName::Named("void"), _)),
@@ -169,7 +166,7 @@ mod tests {
                 ),
             ] if params.is_empty() && body_stmts.len() == 1 => match &body_stmts[0] {
                 (
-                    Statement::IfStatement {
+                    Statement::If {
                         condition: (Expression::IntConst(1), _),
                         body: (Block(if_body_stmts), _),
                         else_body: Some((Block(else_body_stmts), _)),
@@ -187,7 +184,7 @@ mod tests {
                                 _,
                             ),
                         ],
-                        [(Statement::ReturnStatement(Some((Expression::IntConst(0), _))), _)],
+                        [(Statement::Return(Some((Expression::IntConst(0), _))), _)],
                     ) => (),
 
                     _ => panic!(

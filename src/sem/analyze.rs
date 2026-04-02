@@ -7,7 +7,7 @@ impl SemanticAnalyzer {
     pub fn analyze_item_bodies<'a>(&mut self, items: &'a [Spanned<Item<'a>>]) {
         for (item, _) in items {
             match item {
-                Item::ConstDecl {
+                Item::Constant {
                     name,
                     type_name,
                     init_expr,
@@ -15,7 +15,7 @@ impl SemanticAnalyzer {
                     let _ = self.analyze_const_decl(name, type_name.as_ref(), init_expr);
                 }
 
-                Item::FuncDecl {
+                Item::Function {
                     name,
                     params,
                     ret_type: _ret_type,
@@ -30,7 +30,7 @@ impl SemanticAnalyzer {
                     let _ = self.analyze_func_decl(name, &extracted_params, body);
                 }
 
-                Item::StructDecl { .. } => {}
+                Item::Struct { .. } => {}
             };
         }
     }
@@ -57,7 +57,7 @@ impl SemanticAnalyzer {
         if self
             .var_env_stack
             .first()
-            .map_or(false, |scope| scope.contains_key(name.0))
+            .is_some_and(|scope| scope.contains_key(name.0))
         {
             self.add_error(
                 format!("Constant '{}' already defined", name.0),
@@ -121,7 +121,23 @@ impl SemanticAnalyzer {
 
         self.analyze_block(body);
 
+        if self.current_function_return_type.as_ref() != Some(&Type::Primitive(PrimitiveType::Void))
+            && !self.block_guarantees_return(body)
+        {
+            self.add_error(
+                format!(
+                    "Function '{}' may exit without returning a value of type '{}'",
+                    name,
+                    self.current_function_return_type
+                        .as_ref()
+                        .expect("current function return type should be set")
+                ),
+                name_s.to_owned(),
+            );
+        }
+
         self.leave_scope();
+        self.current_function_return_type = None;
 
         Ok(())
     }
@@ -138,11 +154,40 @@ impl SemanticAnalyzer {
         self.leave_scope();
     }
 
+    fn block_guarantees_return<'a>(&self, block: &Spanned<Block<'a>>) -> bool {
+        block
+            .0
+            .0
+            .iter()
+            .any(|statement| self.stmt_guarantees_return(statement))
+    }
+
+    fn stmt_guarantees_return<'a>(&self, stmt: &Spanned<Statement<'a>>) -> bool {
+        match &stmt.0 {
+            Statement::Return(_) => true,
+            Statement::If {
+                body,
+                else_body: Some(else_body),
+                ..
+            } => self.block_guarantees_return(body) && self.block_guarantees_return(else_body),
+            Statement::Block(block) => self.block_guarantees_return(block),
+            Statement::Empty
+            | Statement::Expression(_)
+            | Statement::VarDecl { .. }
+            | Statement::ForLoop { .. }
+            | Statement::Break
+            | Statement::Continue
+            | Statement::If {
+                else_body: None, ..
+            } => false,
+        }
+    }
+
     fn analyze_stmt<'a>(&mut self, stmt: &Spanned<Statement<'a>>) -> Result<(), ()> {
         let (stmt, s_span) = stmt;
 
         match stmt {
-            Statement::ExpressionStatement(expr) => {
+            Statement::Expression(expr) => {
                 self.type_of_expr(expr)?;
 
                 Ok(())
@@ -156,7 +201,7 @@ impl SemanticAnalyzer {
                 if self
                     .var_env_stack
                     .last()
-                    .map_or(false, |scope| scope.contains_key(name.0))
+                    .is_some_and(|scope| scope.contains_key(name.0))
                 {
                     self.add_error(
                         format!("Variable '{}' already defined in this scope", name.0),
@@ -187,7 +232,7 @@ impl SemanticAnalyzer {
                 Ok(())
             }
 
-            Statement::IfStatement {
+            Statement::If {
                 condition,
                 body,
                 else_body,
@@ -228,7 +273,7 @@ impl SemanticAnalyzer {
                 Ok(())
             }
 
-            Statement::ReturnStatement(opt_expr_s) => {
+            Statement::Return(opt_expr_s) => {
                 let current_ret_type = match self.current_function_return_type.clone() {
                     Some(t) => t,
 
@@ -245,12 +290,7 @@ impl SemanticAnalyzer {
                 if let Some(expr_s) = opt_expr_s {
                     let ret_expr_type = self.type_of_expr(expr_s)?;
 
-                    let types_match = current_ret_type == ret_expr_type;
-                    let int_to_float_promotion = current_ret_type
-                        == Type::Primitive(PrimitiveType::Float)
-                        && ret_expr_type == Type::Primitive(PrimitiveType::Int);
-
-                    if !types_match && !int_to_float_promotion {
+                    if !Self::types_compatible(&current_ret_type, &ret_expr_type) {
                         self.add_error_with_labels(
                             format!(
                                 "Return type mismatch: function expected '{}', but expression has type '{}'",
@@ -286,7 +326,7 @@ impl SemanticAnalyzer {
                 }
             }
 
-            Statement::BlockStatement(block_s) => {
+            Statement::Block(block_s) => {
                 self.analyze_block(block_s);
 
                 Ok(())
@@ -317,7 +357,7 @@ impl SemanticAnalyzer {
                     Ok(())
                 }
             }
-            Statement::SemicolonStatement => Ok(()),
+            Statement::Empty => Ok(()),
         }
     }
 }

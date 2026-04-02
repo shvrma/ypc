@@ -1,10 +1,8 @@
-mod lexer;
-mod parser;
-mod sem;
+use std::process::ExitCode;
 
 use anyhow::Result;
-use anyhow::bail;
 use ariadne::{ColorGenerator, Label, Report, ReportKind, Source};
+use ypc::{ParseDiagnostic, ParseDiagnosticKind, SemanticError, analyze_source, has_errors};
 
 #[derive(argh::FromArgs)]
 #[allow(dead_code)]
@@ -15,92 +13,91 @@ pub struct Args {
     input: String,
 }
 
-fn main() {
+fn main() -> ExitCode {
     let args: Args = argh::from_env();
 
-    let rslt = process(args);
-    if let Err(e) = rslt {
-        // TODO: acknowladge that this is not a typical error.
-        eprintln!("Error: {}", e);
-
-        std::process::exit(1);
+    match run(args) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
+        }
     }
 }
 
-fn process(args: Args) -> Result<()> {
-    let input_program = std::fs::read_to_string(&args.input)?;
+fn render_parse_diagnostic(
+    diagnostic: ParseDiagnostic,
+    path: &str,
+    colors: &mut ColorGenerator,
+    source: &Source<&str>,
+) -> Result<()> {
+    let span = (path, diagnostic.span.clone());
+    let builder = Report::build(ReportKind::Error, span.clone());
 
-    let err_print_cache = (&args.input, Source::from(&input_program));
-    let mut colors = ColorGenerator::new();
-
-    let parse_result = parser::parse(&input_program);
-
-    if parse_result.has_errors() {
-        for e in parse_result.into_errors() {
-            use chumsky::error::RichReason;
-
-            let on_span = (&args.input, e.span().to_owned());
-
-            let builder = Report::build(ReportKind::Error, on_span.clone());
-
-            match e.into_reason() {
-                RichReason::ExpectedFound { expected, found } => builder
-                    .with_message(format!("Unexpected token found"))
-                    .with_label(
-                        Label::new(on_span.clone())
-                            .with_message(if let Some(found) = found {
-                                format!("Found: {}", found.into_inner())
-                            } else {
-                                "Found: EOF".to_string()
-                            })
-                            .with_color(colors.next()),
-                    )
-                    .with_note(format!(
-                        "Expected one of: {}",
-                        expected
-                            .iter()
-                            .map(|s| format!("{}", s))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )),
-
-                RichReason::Custom(e) => builder.with_message(e),
-            }
-            .finish()
-            .eprint(err_print_cache.clone())?;
-        }
-
-        return Ok(());
+    match diagnostic.kind {
+        ParseDiagnosticKind::ExpectedFound { expected, found } => builder
+            .with_message("Unexpected token found".to_string())
+            .with_label(
+                Label::new(span.clone())
+                    .with_message(match found {
+                        Some(found) => format!("Found: {found}"),
+                        None => "Found: EOF".to_string(),
+                    })
+                    .with_color(colors.next()),
+            )
+            .with_note(format!("Expected one of: {}", expected.join(", "))),
+        ParseDiagnosticKind::Custom(message) => builder.with_message(message),
     }
-
-    let Some(parse_result) = parse_result.output() else {
-        bail!("Parser returned no output");
-    };
-
-    let sem_check_result = sem::SemanticAnalyzer::analyze(parse_result);
-
-    if !sem_check_result.is_empty() {
-        for e in sem_check_result {
-            let mut rep = Report::build(ReportKind::Error, (&args.input, e.span.clone()))
-                .with_message(e.message);
-
-            if e.labels.is_empty() {
-                rep = rep.with_label(Label::new((&args.input, e.span)).with_color(colors.next()));
-            }
-
-            for (l_msg, l_span) in e.labels {
-                rep = rep.with_label(
-                    Label::new((&args.input, l_span))
-                        .with_message(l_msg)
-                        .with_color(colors.next()),
-                )
-            }
-
-            rep.finish().eprint(err_print_cache.clone())?;
-        }
-
-        return Ok(());
-    }
+    .finish()
+    .eprint((path, source.clone()))?;
 
     Ok(())
+}
+
+fn render_semantic_error(
+    error: SemanticError,
+    path: &str,
+    colors: &mut ColorGenerator,
+    source: &Source<&str>,
+) -> Result<()> {
+    let mut report =
+        Report::build(ReportKind::Error, (path, error.span.clone())).with_message(error.message);
+
+    if error.labels.is_empty() {
+        report = report.with_label(Label::new((path, error.span)).with_color(colors.next()));
+    }
+
+    for (label_message, label_span) in error.labels {
+        report = report.with_label(
+            Label::new((path, label_span))
+                .with_message(label_message)
+                .with_color(colors.next()),
+        );
+    }
+
+    report.finish().eprint((path, source.clone()))?;
+
+    Ok(())
+}
+
+fn run(args: Args) -> Result<ExitCode> {
+    let source_text = std::fs::read_to_string(&args.input)?;
+    let source = Source::from(source_text.as_str());
+    let mut colors = ColorGenerator::new();
+    let diagnostics = analyze_source(&source_text);
+    let has_any_errors = has_errors(&diagnostics);
+
+    for parse_error in diagnostics.parse_errors {
+        render_parse_diagnostic(parse_error, &args.input, &mut colors, &source)?;
+    }
+
+    for semantic_error in diagnostics.semantic_errors {
+        render_semantic_error(semantic_error, &args.input, &mut colors, &source)?;
+    }
+
+    Ok(if has_any_errors {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    })
 }

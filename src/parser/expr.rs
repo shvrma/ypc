@@ -1,3 +1,5 @@
+use std::fmt::{Display, Formatter};
+
 use crate::parser::*;
 
 #[derive(Debug, PartialEq)]
@@ -20,7 +22,7 @@ pub enum Expression<'a> {
         func: Spanned<&'a str>,
         args: Vec<Spanned<Expression<'a>>>,
     },
-    ParenthisedExpr(Box<Spanned<Expression<'a>>>),
+    Parenthesized(Box<Spanned<Expression<'a>>>),
     Assignment {
         lhs: Box<Spanned<Expression<'a>>>,
         rhs: Box<Spanned<Expression<'a>>>,
@@ -58,6 +60,30 @@ pub enum BinOp {
     Or,     // ||
 }
 
+impl Display for BinOp {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let symbol = match self {
+            Self::Add => "+",
+            Self::Sub => "-",
+            Self::Mul => "*",
+            Self::Div => "/",
+            Self::Mod => "%",
+            Self::Eq => "==",
+            Self::Neq => "!=",
+            Self::Lt => "<",
+            Self::Gt => ">",
+            Self::Leq => "<=",
+            Self::Geq => ">=",
+            Self::RShift => ">>",
+            Self::LShift => "<<",
+            Self::And => "&&",
+            Self::Or => "||",
+        };
+
+        write!(f, "{symbol}")
+    }
+}
+
 pub fn expr<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
 -> impl Parser<'a, I, Spanned<Expression<'a>>, ExtraT<'a>> + Clone {
     recursive(|expr| {
@@ -80,17 +106,15 @@ pub fn expr<'a, I: ValueInput<'a, Token = Token<'a>, Span = SpanT>>()
             )
             .map_with(|(func, args), e| (Expression::FuncCall { func, args }, e.span()));
 
-        let parantherised_atom = expr
+        let parenthesized_atom = expr
             .clone()
             .delimited_by(
                 just(Token::LeftParenthesisSign),
                 just(Token::RightParenthesisSign),
             )
-            .map_with(|inner_expr, e| {
-                (Expression::ParenthisedExpr(Box::new(inner_expr)), e.span())
-            });
+            .map_with(|inner_expr, e| (Expression::Parenthesized(Box::new(inner_expr)), e.span()));
 
-        let atom = choice((func_call_atom, consts_or_var_atom, parantherised_atom));
+        let atom = choice((func_call_atom, consts_or_var_atom, parenthesized_atom));
 
         use chumsky::pratt::{infix, left, postfix, prefix, right};
         atom.pratt((
@@ -348,14 +372,14 @@ mod tests {
     fn test_expr_int_literal() {
         let result = expr().parse(into_parser_input("123")).into_result();
 
-        matches!(result, Ok((Expression::IntConst(123), _)));
+        assert!(matches!(result, Ok((Expression::IntConst(123), _))));
     }
 
     #[test]
     fn test_expr_float_literal() {
         let result = expr().parse(into_parser_input("123.45")).into_result();
 
-        matches!(result, Ok((Expression::FloatConst(123.45), _)));
+        assert!(matches!(result, Ok((Expression::FloatConst(123.45), _))));
     }
 
     #[test]
@@ -364,14 +388,16 @@ mod tests {
             .parse(into_parser_input("\"hello world\""))
             .into_result();
 
-        matches!(result, Ok((Expression::StringConst(ref str_content), _)) if str_content == "hello world");
+        assert!(
+            matches!(result, Ok((Expression::StringConst(ref str_content), _)) if str_content == "hello world")
+        );
     }
 
     #[test]
     fn test_expr_identifier() {
         let result = expr().parse(into_parser_input("my_var")).into_result();
 
-        matches!(result, Ok((Expression::Variable("my_var"), _)));
+        assert!(matches!(result, Ok((Expression::Variable("my_var"), _))));
     }
 
     #[test]
@@ -379,7 +405,7 @@ mod tests {
         let result = expr().parse(into_parser_input("(1 + 2)")).into_result();
 
         match result {
-            Ok((Expression::ParenthisedExpr(inner_expr_spanned), _)) => {
+            Ok((Expression::Parenthesized(inner_expr_spanned), _)) => {
                 if let (
                     Expression::BinOp {
                         lhs,
@@ -396,7 +422,7 @@ mod tests {
                 }
             }
 
-            _ => panic!("Expected ParenthisedExpr, got {:?}", result),
+            _ => panic!("Expected Parenthesized, got {:?}", result),
         }
     }
 
